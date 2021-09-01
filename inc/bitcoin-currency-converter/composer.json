@@ -1,0 +1,5 @@
+{
+    "require": {
+        "jimmerioles/bitcoin-currency-converter-php": "^0.3.1"
+    }
+}

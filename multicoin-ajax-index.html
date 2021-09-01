@@ -1,0 +1,323 @@
+<html lang="en">
+
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Checkout Payment!</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="assets/vendor/bootstrap/css/bootstrap.min.css">
+    <link rel="stylesheet" href="assets/css/style.css">
+    <link href="assets/vendor/fontawesome/css/all.css" rel="stylesheet">
+    <script src="assets/vendor/axios/axios.min.js"></script>
+    <link href="assets/vendor/vue-loading-overlay/vue-loading.css" rel="stylesheet">
+    <!--load all styles -->
+</head> 
+<body class="multicoin-body">
+
+    <div id="root" class="container" v-cloak>
+
+   <div class="row justify-content-md-center mt-5">
+     
+
+     <div class="col-lg-6 col-sm-12 col-md-6 col-md-auto "  v-if="currentPage === 'start'">
+        <div class="d-flex bd-highlight">
+  <div class="p-2 w-100 bd-highlight font-weight-bold">Company Name</div>
+ 
+</div>
+      <div class="card shadow-sm">
+  <h5 class="card-header bg-white p-1">
+      <div class="d-flex bd-highlight mb-3">
+  <div class="p-2 bd-highlight font-weight-light h6">Order #x  <br>1 × Caramel Macchiato </div>
+  <div class="ml-auto p-2 bd-highlight font-weight-light">{{ amount }} USD</div>
+</div>
+  </h5>
+  <div class="card-body">
+    <h5 class="card-title text-center">Select payment currency</h5>
+ 
+ <ul class="list-group">
+
+  <li v-for="coin in coins" class="list-group-item d-flex justify-content-between align-items-center ml-3 mr-3 mt-2 mb-2" :class="{ 'active': isactive === coin.name}"  :key="coin.coin" @click="setActive(coin.name)">
+   <div> <img :src="coin.coin_logo" class="icon-sm"> <span class="display-4 t-x2 align-middle">{{ coin.name }}</span> </div>
+    <span class="display-4 t-x2">{{ coin.rate }} {{ coin.coin.toUpperCase() }}</span>
+  </li>
+ 
+ 
+
+</ul>
+
+
+  <div class="form-group m-3">
+     <div class="input-group mb-2 mr-sm-2">
+    <div class="input-group-prepend">
+      <div class="input-group-text"><i class="far fa-envelope"></i></div>
+    </div> 
+    <input type="email" :class="['form-control', isEmailValid()]" v-model="email" placeholder="Your email address">
+  </div>
+  </div>
+
+  <div class="form-group m-3">
+    <button class="btn btn-primary btn-block" v-on:click="paymentSubmit" :disabled='isDisabled'>{{ pay }}</button>
+
+
+</div>
+
+  
+  </div>
+</div>
+
+    </div>
+
+
+
+
+
+
+
+    <div class="col-lg-6 col-sm-12 col-md-6 col-md-auto " v-else-if="currentPage === 'payment'">
+        <div class="d-flex bd-highlight">
+  <div class="p-2 w-100 bd-highlight font-weight-bold">Company Name</div>
+<div class="p-2 flex-shrink-1 bd-highlight dropdown"><button type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"  class="btn btn-sm btn-light dropdown-toggle"><i class="fas fa-list"></i></button>
+  <div class="dropdown-menu">
+    <a class="dropdown-item" onclick="location.reload();" href="#">Refresh</a>
+  </div></div>
+
+</div>
+      <div class="card shadow-sm">
+  <h5 class="card-header bg-white p-1">
+     <div class="d-flex bd-highlight mb-3">
+  <div class="mr-auto p-2 bd-highlight h6 font-weight-light">Order #{{ invoice.invoice }}  <br>1 × Caramel Macchiato</div>
+  <div class="p-2 bd-highlight text-right">{{ invoice.amount }} <br> {{ invoice.dollar }} USD</div>
+  <div class="p-2 bd-highlight"><img :src="invoice.coin_logo" class="icon-sm"> </div>
+</div>
+  </h5>
+  <div class="card-body count-holder text-center display-4 t-x2 m-0 p-0">
+<countdown :time="invoice.expiring" @progress="handleCountdownProgress">
+  <template slot-scope="props">{{ props.hours }}:{{ props.minutes }}:{{ props.seconds }}</template>
+</countdown>
+</div>
+  <div class="card-body">
+
+
+    <div class="text-center" id="invoice-qr-code"><img :src="invoice.qrcode" class="grcode-modal"></div>
+
+
+    <div class="send-amount mt-3">
+        <div>Send the indicated amount to the address below</div>
+    </div>
+
+<div class="form-group">
+<div class="input-group">
+        <div class="input-group-prepend">
+          <div class="input-group-text">{{ invoice.coin }}</div>
+        </div>
+        <input type="text" class="form-control text-center" id="amount" v-model="invoice.amount">
+        <div class="input-group-prepend">
+          <button class="input-group-text" data-toggle="modal" data-target="#amountModal" data-toggle="tooltip" data-placement="top" title="QR Code Amount!"><i class="fas fa-qrcode"></i></button>
+        </div>
+        <div class="input-group-prepend">
+          <button id="copyImg" data-original-title="Copy Amount!" data-clipboard-target="#amount" class="input-group-text copyImg"  data-toggle="tooltip" data-placement="top"><i class="fas fa-copy"></i></button>
+        </div>
+      </div>
+</div>
+
+
+<div class="form-group mb-5">
+<div class="input-group">
+        <div class="input-group-prepend">
+          <div class="input-group-text"><i class="fas fa-wallet"></i></div>
+        </div>
+        <input type="text" class="form-control text-center" id="wallet" v-model="invoice.address">
+        <div class="input-group-prepend">
+          <button class="input-group-text" data-toggle="modal" data-target="#walletModal" data-toggle="tooltip" data-placement="top" title="QR Code Wallet!"><i class="fas fa-qrcode"></i></button>
+        </div>
+        <div class="input-group-prepend">
+          <button id="copyWallet" data-original-title="Copy Address!" data-clipboard-target="#wallet" class="copyWallet input-group-text" data-toggle="tooltip" data-placement="top"><i class="fas fa-copy"></i></button>
+        </div>
+      </div>
+</div>
+
+
+
+
+</div>
+</div>
+<div class="shadow-none p-3 bg-light rounded">
+    <p class="text-muted small">Do not send funds from an exchange. <a href="#" rel="noopener noreferrer" target="_blank">Here is why.</a> </p>
+<p class="text-muted small">Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s,</p></div>
+
+<div class="d-flex bd-highlight mb-3">
+  <div class="pt-2 pl-1 bd-highlight small">Created: {{ invoice.created }}</div>
+  <div class="ml-auto pt-2 pr-1 bd-highlight small">Payment ID #{{ invoice.payment_id }}</div>
+</div>
+
+
+<!-- Modal -->
+<div class="modal fade" id="amountModal" tabindex="-1" role="dialog" aria-labelledby="amountModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="amountModalLabel">Amount QR Code</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body text-center">
+<div id="invoice-qr-code" class="mb-2"><img :src="invoice.qramount" class="grcode-modal"></div>
+<h4>{{ invoice.amount }} {{ invoice.coin }}</h4>
+      </div>
+     
+    </div>
+  </div>
+</div>
+
+
+<!-- Modal -->
+<div class="modal fade" id="walletModal" tabindex="-1" role="dialog" aria-labelledby="walletModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="walletModalLabel">Address QR Code</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body text-center">
+<div id="invoice-qr-code" class="mb-2" ><img :src="invoice.qrcode" class="grcode-modal"></div>
+<p>{{ invoice.address }}</p>
+      </div>
+     
+    </div>
+  </div>
+</div>
+
+
+    </div>
+
+
+
+
+
+
+<div class="col-lg-6 col-sm-12 col-md-6 col-md-auto " v-else-if="currentPage === 'confirmed'">
+        <div class="d-flex bd-highlight">
+  <div class="p-2 w-100 bd-highlight font-weight-bold">Company Name</div>
+  <div class="p-2 flex-shrink-1 bd-highlight dropdown"><button type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"  class="btn btn-sm btn-light dropdown-toggle"><i class="fas fa-list"></i></button>
+  <div class="dropdown-menu">
+    <a class="dropdown-item" onclick="location.reload();" href="#">Refresh</a>
+  </div></div>
+
+</div>
+      <div class="card shadow-sm">
+  <h5 class="card-header bg-white p-1">
+     <div class="d-flex bd-highlight mb-3">
+<div class="mr-auto p-2 bd-highlight h6 font-weight-light">Order #{{ invoice.invoice }}  <br>1 × Caramel Macchiato</div>
+  <div class="p-2 bd-highlight text-right">{{ invoice.amount }} <br> {{ invoice.dollar }} USD</div>
+  <div class="p-2 bd-highlight"><img :src="invoice.coin_logo" class="icon-sm"> </div>
+</div>
+  </h5>
+  <div class="card-body text-center">
+   <img src="assets/img/success.png" class="img-70">
+   <h3 class="payment-paid">Paid and Confirmed</h3>
+
+   <div class="form-group text-center mt-4">
+    <a href="#" class="btn btn-outline-dark">Check Invoice</a>
+  
+  </div>
+
+</div>
+</div>
+
+
+<div class="d-flex bd-highlight mb-3">
+  <div class="pt-2 pl-1 bd-highlight small">Created: {{ invoice.created }}</div>
+  <div class="ml-auto pt-2 pr-1 bd-highlight small">Payment ID #{{ invoice.payment_id }}</div>
+</div>
+    </div>
+
+
+
+<div class="col-lg-6 col-sm-12 col-md-6 col-md-auto " v-else-if="currentPage === 'expired'">
+        <div class="d-flex bd-highlight">
+  <div class="p-2 w-100 bd-highlight font-weight-bold">Company Name</div>
+  <div class="p-2 flex-shrink-1 bd-highlight dropdown"><button type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"  class="btn btn-sm btn-light dropdown-toggle"><i class="fas fa-list"></i></button>
+  <div class="dropdown-menu">
+    <a class="dropdown-item" onclick="location.reload();" href="#">Refresh</a>
+  </div></div>
+</div>
+      <div class="card shadow-sm">
+  <h5 class="card-header bg-white p-1">
+     <div class="d-flex bd-highlight mb-3">
+<div class="mr-auto p-2 bd-highlight h6 font-weight-light">Order #{{ invoice.invoice }}  <br>1 × Caramel Macchiato</div>
+ <div class="p-2 bd-highlight text-right">{{ invoice.amount }} <br> {{ invoice.dollar }} USD</div>
+  <div class="p-2 bd-highlight"><img :src="invoice.coin_logo" class="icon-sm"> </div>
+</div>
+  </h5>
+  <div class="card-body text-center">
+   <h3>This order has expired</h3>
+</div>
+</div>
+
+<div class="d-flex bd-highlight mb-3">
+  <div class="pt-2 pl-1 bd-highlight small">Created: {{ invoice.created }}</div>
+  <div class="ml-auto pt-2 pr-1 bd-highlight small">Payment ID #{{ invoice.payment_id }}</div>
+</div>
+    </div>
+
+
+
+
+
+
+
+<div class="col-lg-6 col-sm-12 col-md-6 col-md-auto " v-else>
+        <div class="d-flex bd-highlight">
+  <div class="p-2 w-100 bd-highlight font-weight-bold">Company Name</div>
+<div class="p-2 flex-shrink-1 bd-highlight dropdown"><button type="button" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"  class="btn btn-sm btn-light dropdown-toggle"><i class="fas fa-list"></i></button>
+  <div class="dropdown-menu">
+    <a class="dropdown-item" onclick="location.reload();" href="#">Refresh</a>
+  </div></div>
+
+</div>
+      <div class="card shadow-sm">
+  <h5 class="card-header bg-white p-1">
+     <div class="d-flex bd-highlight mb-3">
+<div class="mr-auto p-2 bd-highlight h6 font-weight-light">Order #{{ invoice.invoice }}  <br>1 × Caramel Macchiato</div>
+ <div class="p-2 bd-highlight text-right">{{ invoice.amount }} <br> {{ invoice.dollar }} USD</div>
+  <div class="p-2 bd-highlight"><img :src="invoice.coin_logo" class="icon-sm"> </div>
+</div>
+  </h5>
+  <div class="card-body text-center">
+   <h3>This order is invalid</h3>
+</div>
+</div>
+
+<div class="d-flex bd-highlight mb-3">
+  <div class="pt-2 pl-1 bd-highlight small">Created: {{ invoice.created }}</div>
+  <div class="ml-auto pt-2 pr-1 bd-highlight small">Payment ID #{{ invoice.payment_id }}</div>
+</div>
+    </div>
+
+
+  </div>
+</div>
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script src='assets/js/jquery.min.js'></script>
+    <script src="assets/js/popper.min.js"></script>
+    <script src="assets/vendor/bootstrap/js/bootstrap.min.js"></script>
+    <script src="assets/vendor/vue/vue.js"></script>
+    <!--Do not remove-->
+  
+    <script src="assets/vendor/sweetalert2/sweetalert2.all.min.js"></script>
+    <script src="assets/vendor/vue-loading-overlay/vue-loading-overlay%403.js"></script>
+    <script src="assets/vendor/vue-countdown/vue-countdown.min.js"></script>
+    <script src="assets/js/clipboard.min.js"></script>
+    <script src="assets/js/gateway.js"></script>
+    <script src="assets/js/main.js"></script>
+    <script src="assets/js/app.js"></script>
+
+</body>
+
+</html>
+
