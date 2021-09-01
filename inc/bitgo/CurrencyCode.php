@@ -17,6 +17,15 @@ class CurrencyCode {
     const ZCASH = 'zec';
     const STELLAR = 'xlm';
     
+    // legacy Cryptonote COINS
+    const ETNX = 'etnx';
+    const ETNXP = 'etnxp';
+    const LTNX = 'ltnx';
+    const GLDX = 'gldx';
+    const CRFI = 'cRFI';
+    const ETN = 'etn';
+    const XMR = 'xmr';
+    
     //XRC20 TOKENS
     const xETNX = 'xetnx';
     const xETNXP = 'xetnxp';
