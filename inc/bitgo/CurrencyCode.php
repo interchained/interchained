@@ -17,6 +17,19 @@ class CurrencyCode {
     const ZCASH = 'zec';
     const STELLAR = 'xlm';
     
+    //XRC20 TOKENS
+    const xETNX = 'xetnx';
+    const xETNXP = 'xetnxp';
+    const xLTNX = 'xltnx';
+    const xGLDX = 'xgldx';
+    const xCRFI = 'xcRFI';
+    const xETN = 'xetn';
+    const xXMR = 'xxmr';
+    
+    //BEP20 TOKENS
+    // const BSC = 'bnb'; 
+    const INTERCHAINED = 'xsc';
+    
     //ERC20 TOKENS
     const ERC = 'erc'; //BitGo’s sample ERC20 token
     const OMISE_GO = 'omg';
