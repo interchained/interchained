@@ -370,10 +370,8 @@ bool TokenLedger::SignTokenOperationWithKey(TokenOperation& op, const std::strin
 
     CPubKey pubkey = key.GetPubKey();
     CTxDestination dest;
-    // We default to legacy address for WIF signing unless specified otherwise? 
-    // Actually, common practice for interchained-cli would be to use the address type associated with the key.
-    // Let's use PKHash (legacy) for now as it's the most compatible for simple WIF keys.
-    dest = PKHash(pubkey);
+    // Default to segwit address for WIF signing
+    dest = WitnessV0KeyHash(pubkey);
     
     std::string signer = EncodeDestination(dest);
     op.signer = signer;
