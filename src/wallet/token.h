@@ -189,6 +189,7 @@ public:
     void ProcessBlock(const CBlock& block, int height);
     int GetDecimals(const std::string& token_id) const;
     bool SignTokenOperation(TokenOperation& op, CWallet& wallet, const std::string& walletName, bool witness);
+    bool SignTokenOperationWithKey(TokenOperation& op, const std::string& wifKey);
 
 private:
     void CreateToken(const std::string& wallet, const std::string& token, CAmount amount,

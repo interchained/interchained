@@ -1,0 +1,59 @@
+// Original function signature (simplified)
+// bool ContextualCheckTransaction(const CTransaction& tx, CValidationState& state, int nHeight, int64_t nLockTimeCutoff, bool fBlock, bool fMempool)
+// {
+//     // ... existing checks ...
+// }
+
+// Proposed change within ContextualCheckTransaction:
+
+bool ContextualCheckTransaction(const CTransaction& tx, CValidationState& state, int nHeight, int64_t nLockTimeCutoff, bool fBlock, bool fMempool)
+{
+    // ... existing checks (e.g., version, inputs, outputs, fee) ...
+
+    // Check nLockTime (existing logic)
+    // For nLockTime, all inputs must have nSequence < SEQUENCE_FINAL
+    bool fLockTimeActive = false;
+    if (tx.nLockTime > 0) {
+        for (const auto& txin : tx.vin) {
+            if (!(txin.nSequence & CTxIn::SEQUENCE_LOCKTIME_DISABLE_FLAG)) {
+                fLockTimeActive = true;
+                break;
+            }
+        }
+    }
+    if (fLockTimeActive) {
+        if (tx.nLockTime < nLockTimeCutoff) {
+            // ... (Handle nLockTime being too low, already valid) ...
+        } else if (tx.nLockTime > nLockTimeCutoff) {
+            return state.Invalid(ValidationInvalidReason::TX_PREMATURE_SPEND, false, REJECT_NONSTANDARD, "bad-txns-premature-spend", strprintf("nLockTime too high: %u >= %u", tx.nLockTime, nLockTimeCutoff));
+        }
+    }
+
+    // NEW: Check Transaction Expiry Height
+    // If nExpiryHeight is set (non-zero) and the current block height
+    // is greater than or equal to nExpiryHeight, the transaction is expired.
+    if (tx.nExpiryHeight > 0) { // Only apply if an expiry height is specified
+        if (nHeight >= tx.nExpiryHeight) {
+            // Note: REJECT_EXPIRED would need to be defined in validation.h
+            return state.Invalid(ValidationInvalidReason::TX_EXPIRY, false, REJECT_EXPIRED, "bad-txns-expired",
+                                 strprintf("transaction has expired at block height %u (current height %u)", tx.nExpiryHeight, nHeight));
+        }
+    }
+
+    // ... rest of the validation function ...
+
+    return true;
+}
+
+// In src/validation.h, you would add a new rejection reason:
+// enum ValidationInvalidReason {
+//     // ... existing reasons ...
+//     TX_EXPIRY, // New reason for expired transactions
+//     // ...
+// };
+// And in src/consensus/validation.h (or similar for reject codes):
+// enum RejectReason {
+//     // ... existing reasons ...
+//     REJECT_EXPIRED = 0x10, // Example new reject code
+//     // ...
+// };

@@ -360,6 +360,40 @@ bool TokenLedger::SignTokenOperation(TokenOperation& op, CWallet& wallet, const 
     return true;
 }
 
+bool TokenLedger::SignTokenOperationWithKey(TokenOperation& op, const std::string& wifKey)
+{
+    CKey key = DecodeSecret(wifKey);
+    if (!key.IsValid()) {
+        LogPrintf("❌ SignTokenOperationWithKey: Invalid WIF key\n");
+        return false;
+    }
+
+    CPubKey pubkey = key.GetPubKey();
+    CTxDestination dest;
+    // We default to legacy address for WIF signing unless specified otherwise? 
+    // Actually, common practice for interchained-cli would be to use the address type associated with the key.
+    // Let's use PKHash (legacy) for now as it's the most compatible for simple WIF keys.
+    dest = PKHash(pubkey);
+    
+    std::string signer = EncodeDestination(dest);
+    op.signer = signer;
+    op.timestamp = GetTime();
+    
+    std::string message = BuildTokenMsg(op);
+    LogPrintf("✍️ SignTokenOperationWithKey: OP to sign: %s\n", message);
+
+    uint256 hash = MessageHash(message);
+    std::vector<unsigned char> vchSig;
+    if (!key.SignCompact(hash, vchSig)) {
+        LogPrintf("❌ SignTokenOperationWithKey: Signing failed\n");
+        return false;
+    }
+
+    op.signature = EncodeBase64(vchSig.data(), vchSig.size());
+    LogPrintf("✅ SignTokenOperationWithKey: Signed by %s\n", signer);
+    return true;
+}
+
 static bool IsWitnessDestination(const CTxDestination& dest) {
     return boost::get<WitnessV0KeyHash>(&dest) != nullptr;
 }
