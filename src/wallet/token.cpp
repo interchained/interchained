@@ -389,7 +389,7 @@ bool TokenLedger::SignTokenOperationWithKey(TokenOperation& op, const std::strin
         return false;
     }
 
-    op.signature = EncodeBase64(vchSig.data(), vchSig.size());
+    op.signature = EncodeBase64(vchSig);
     LogPrintf("✅ SignTokenOperationWithKey: Signed by %s\n", signer);
     return true;
 }
