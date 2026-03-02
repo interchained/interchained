@@ -387,7 +387,24 @@ def _execute_command(client, args):
         if hasattr(args, 'wif_key') and args.wif_key:
             address = get_segwit_address_from_wif(args.wif_key)
             print(f"[*] Derived Segwit Address from WIF: {address}")
-            return client._call_rpc("gettokenbalanceof", ["*", address]) # gettokenbalanceof natively doesn't support wildcards yet, but we will print address
+            
+            all_known_tokens = client.all_tokens()
+            if isinstance(all_known_tokens, dict) and "error" in all_known_tokens:
+                return all_known_tokens # return rpc error
+
+            held_tokens = []
+            for token_info in all_known_tokens:
+                try:
+                    bal_str = client.get_token_balance_of(token_info["address"], address)
+                    if isinstance(bal_str, dict) and "error" in bal_str:
+                        continue
+                    if float(bal_str) > 0:
+                        token_info["balance"] = bal_str
+                        held_tokens.append(token_info)
+                except Exception as e:
+                    # Ignore tokens that fail to fetch balance (e.g. invalid token ID error from node)
+                    continue
+            return held_tokens
         return client.my_tokens(args.witness)
     elif args.command == "all_tokens":
         return client.all_tokens()
