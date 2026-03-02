@@ -6232,7 +6232,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrasechange",           &walletpassphrasechange,        {"oldpassphrase","newpassphrase"} },
     { "wallet",             "walletprocesspsbt",                &walletprocesspsbt,             {"psbt","sign","sighashtype","bip32derivs"} },
     { "wallet",             "createtoken",                      &createtoken,                   {"amount","name","symbol","decimals","witness","wif_key"} },
-    { "wallet",             "gettokenbalance",                  &gettokenbalance,               {"token","witness"} },
+    { "wallet",             "gettokenbalance",                  &gettokenbalance,               {"token","witness","address"} },
     { "wallet",             "gettokenbalanceof",                &gettokenbalanceof,             {"token","address"} },
     { "wallet",             "getsigneraddress",                 &getsigneraddress,              {} },
     { "wallet",             "tokenapprove",                     &tokenapprove,                  {"spender","token","amount","witness","wif_key"} },
