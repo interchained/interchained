@@ -189,6 +189,7 @@ public:
     void ProcessBlock(const CBlock& block, int height);
     int GetDecimals(const std::string& token_id) const;
     bool SignTokenOperation(TokenOperation& op, CWallet& wallet, const std::string& walletName, bool witness);
+    bool SignTokenOperationWithKey(TokenOperation& op, const std::string& wifKey);
 
 private:
     void CreateToken(const std::string& wallet, const std::string& token, CAmount amount,
@@ -203,8 +204,7 @@ private:
     bool Burn(const std::string& wallet, const std::string& token, CAmount amount);
     bool Mint(const std::string& wallet, const std::string& token, CAmount amount);
     bool TransferOwnership(const std::string& from, const std::string& to, const std::string& token);
-    bool SendGovernanceFee(const std::string& wallet, CAmount fee);
-    bool RecordOperationOnChain(const std::string& wallet, const TokenOperation& op);
+    bool BroadcastOperation(const std::string& wallet, const TokenOperation& op, CAmount govFee);
 
     mutable RecursiveMutex m_mutex;
     std::map<std::pair<std::string, std::string>, CAmount> m_balances;

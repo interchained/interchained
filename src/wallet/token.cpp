@@ -279,7 +279,7 @@ std::vector<std::tuple<std::string,std::string,std::string>> TokenLedger::ListWa
     return out;
 }
 
-bool TokenLedger::SendGovernanceFee(const std::string& wallet, CAmount fee)
+bool TokenLedger::BroadcastOperation(const std::string& wallet, const TokenOperation& op, CAmount govFee)
 {
     std::shared_ptr<CWallet> from = GetWallet(wallet);
     if (!from) {
@@ -289,28 +289,51 @@ bool TokenLedger::SendGovernanceFee(const std::string& wallet, CAmount fee)
 
     LOCK(from->cs_wallet);
 
-    CTxDestination dest = DecodeDestination(m_governance_wallet);
-    if (!IsValidDestination(dest)) {
-        LogPrintf("❌ Invalid governance wallet address: %s\n", m_governance_wallet);
-        return false;
+    std::vector<CRecipient> vecSend;
+
+    // 1. Add Governance Fee Output (if any)
+    if (govFee > 0) {
+        CTxDestination dest = DecodeDestination(m_governance_wallet);
+        if (!IsValidDestination(dest)) {
+            LogPrintf("❌ Invalid governance wallet address: %s\n", m_governance_wallet);
+            return false;
+        }
+        vecSend.push_back({GetScriptForDestination(dest), govFee, false});
     }
 
-    CRecipient recipient{GetScriptForDestination(dest), fee, /*subtractFeeFromAmount=*/false};
-    CCoinControl cc;
-    std::vector<CRecipient> vecSend{recipient};
+    // 2. Add OP_RETURN Metadata Output
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+    ss << op;
+    CScript script;
+    script << OP_RETURN << ToByteVector(ss);
+    vecSend.push_back({script, 0, false}); // 0 amount for OP_RETURN
+
     CAmount nFeeRequired;
     int nChangePosRet = -1;
     bilingual_str err;
     CTransactionRef tx;
     FeeCalculation fee_calc;
 
-    bool created = from->CreateTransaction(vecSend, tx, nFeeRequired, nChangePosRet, err, cc, fee_calc, !from->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS));
+    bool created = from->CreateTransaction(vecSend, tx, nFeeRequired, nChangePosRet, err, CCoinControl(), fee_calc, !from->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS));
     if (!created || !tx) {
-        LogPrintf("❌ Failed to create governance fee transaction: %s\n", err.original);
+        LogPrintf("❌ Failed to create token transaction: %s\n", err.original);
         return false;
     }
-    from->CommitTransaction(tx, {}, {});
-    LogPrintf("✅ Governance fee transaction committed: %s\n", tx->GetHash().ToString());
+
+    from->AddToWallet(tx, {}, [&](CWalletTx& wtx, bool new_tx) {
+        wtx.fTimeReceivedIsTxTime = true;
+        wtx.fFromMe = true;
+        return true;
+    });
+
+    CWalletTx& wtx = from->mapWallet.at(tx->GetHash());
+    std::string err_string;
+    if (!wtx.SubmitMemoryPoolAndRelay(err_string, true)) {
+        LogPrintf("❌ Token transaction rejected by mempool: %s\n", err_string);
+        return false;
+    }
+
+    LogPrintf("🚀 Token operation broadcast! TXID: %s\n", tx->GetHash().GetHex());
     return true;
 }
 
@@ -357,6 +380,38 @@ bool TokenLedger::SignTokenOperation(TokenOperation& op, CWallet& wallet, const 
     if (err != SigningResult::OK) return false;
 
     LogPrintf("✅ SignTokenOperation: Signed by %s\n", signer);
+    return true;
+}
+
+bool TokenLedger::SignTokenOperationWithKey(TokenOperation& op, const std::string& wifKey)
+{
+    CKey key = DecodeSecret(wifKey);
+    if (!key.IsValid()) {
+        LogPrintf("❌ SignTokenOperationWithKey: Invalid WIF key\n");
+        return false;
+    }
+
+    CPubKey pubkey = key.GetPubKey();
+    CTxDestination dest;
+    // Default to segwit address for WIF signing
+    dest = WitnessV0KeyHash(pubkey);
+    
+    std::string signer = EncodeDestination(dest);
+    op.signer = signer;
+    op.timestamp = GetTime();
+    
+    std::string message = BuildTokenMsg(op);
+    LogPrintf("✍️ SignTokenOperationWithKey: OP to sign: %s\n", message);
+
+    uint256 hash = MessageHash(message);
+    std::vector<unsigned char> vchSig;
+    if (!key.SignCompact(hash, vchSig)) {
+        LogPrintf("❌ SignTokenOperationWithKey: Signing failed\n");
+        return false;
+    }
+
+    op.signature = EncodeBase64(vchSig);
+    LogPrintf("✅ SignTokenOperationWithKey: Signed by %s\n", signer);
     return true;
 }
 
@@ -452,28 +507,6 @@ bool TokenLedger::VerifySignature(const TokenOperation& op) const
     return true;
 }
 
-bool TokenLedger::RecordOperationOnChain(const std::string& wallet, const TokenOperation& op)
-{
-    std::shared_ptr<CWallet> from = GetWallet(wallet);
-    if (!from) return false;
-    LOCK(from->cs_wallet);
-    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
-    ss << op;
-    CScript script;
-    script << OP_RETURN << ToByteVector(ss);
-    CRecipient recipient{script, 546, false};
-    CCoinControl cc;
-    std::vector<CRecipient> vecSend{recipient};
-    CAmount nFeeRequired;
-    int nChangePosRet = -1;
-    bilingual_str err;
-    CTransactionRef tx;
-    FeeCalculation fee_calc;
-    bool created = from->CreateTransaction(vecSend, tx, nFeeRequired, nChangePosRet, err, cc, fee_calc, !from->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS));
-    if (!created) return false;
-    from->CommitTransaction(tx, {}, {});
-    return true;
-}
 
 bool TokenLedger::ApplyOperation(const TokenOperation& op, const std::string& wallet_name, bool broadcast)
 {
@@ -532,13 +565,17 @@ bool TokenLedger::ApplyOperation(const TokenOperation& op, const std::string& wa
         CAmount rate = (op.op == TokenOp::CREATE) ? m_create_fee_per_vbyte : m_fee_per_vbyte;
         CAmount fee = vsize * rate;
         if (fee < TOKEN_MIN_GOV_FEE) fee = TOKEN_MIN_GOV_FEE;
-        if (broadcast && !wallet_name.empty() && SendGovernanceFee(wallet_name, fee)) {
+        if (broadcast && !wallet_name.empty()) {
+            if (!BroadcastOperation(wallet_name, op, fee)) {
+                LogPrintf("❌ BroadcastOperation failed.\n");
+                return false;
+            }
             m_governance_fees += fee;
         }
+        
         m_history[op.token].push_back(op);
         LogPrintf("token op %u token=%s from=%s to=%s amount=%d\n", uint8_t(op.op), op.token, op.from, op.to, op.amount);
         Flush();
-        if (broadcast && !wallet_name.empty()) RecordOperationOnChain(wallet_name, op);
     }
 
     if (broadcast && ok) BroadcastTokenOp(op);

@@ -4670,6 +4670,7 @@ static RPCHelpMan createtoken()
             {"symbol", RPCArg::Type::STR, RPCArg::Optional::NO, "Token symbol"},
             {"decimals", RPCArg::Type::STR, RPCArg::Optional::NO, "Number of decimals (0-16)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -4679,7 +4680,7 @@ static RPCHelpMan createtoken()
             },
         },
         RPCExamples{
-            HelpExampleCli("createtoken", "\"1000.12345678\" \"MyToken\" \"MTK\" \"8\" false")
+            HelpExampleCli("createtoken", "\"1000.12345678\" \"MyToken\" \"MTK\" \"8\" false \"WIFKEY_HERE\"")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
@@ -4695,6 +4696,12 @@ static RPCHelpMan createtoken()
             std::string symbol = request.params[2].get_str();
             std::string decimalsStr = request.params[3].get_str();
             std::string has_witness_str = request.params[4].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 5 && !request.params[5].isNull()) {
+                wif_key = request.params[5].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -4719,7 +4726,17 @@ static RPCHelpMan createtoken()
             }
 
             std::string token_id = GenerateTokenId(walletName, name);
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -4745,7 +4762,14 @@ static RPCHelpMan createtoken()
             LogPrintf("🧾 Creating token with signer: %s\n", signer);
             LogPrintf("🧾 CreateToken(): Op to Verify: %s\n", BuildTokenMsg(op));
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Token signing failed");
             }
 
@@ -4769,7 +4793,8 @@ static RPCHelpMan gettokenbalance()
         "\nGet the token balance of this wallet.\n",
         {
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token identifier"},
-            {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer (only if address not provided)"},
+            {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address to check balance for"},
         },
         RPCResult{
             RPCResult::Type::STR,
@@ -4777,7 +4802,7 @@ static RPCHelpMan gettokenbalance()
             "Token balance (formatted string)"
         },
         RPCExamples{
-            HelpExampleCli("gettokenbalance", "\"tokenidtok\" false")
+            HelpExampleCli("gettokenbalance", "\"tokenidtok\" false \"address\"")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
@@ -4788,15 +4813,22 @@ static RPCHelpMan gettokenbalance()
 
             std::string token_id = request.params[0].get_str();            
             std::string has_witness_str = request.params[1].get_str();
-            if (has_witness_str != "true" && has_witness_str != "false") {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
+            
+            std::string signer;
+            if (request.params.size() > 2 && !request.params[2].isNull()) {
+                signer = request.params[2].get_str();
+            } else {
+                if (has_witness_str != "true" && has_witness_str != "false") {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
+                }
+                bool witness = (has_witness_str == "true");
+                signer = g_token_ledger.GetSignerAddress(pwallet->GetName(), *wallet, witness);
             }
-            bool witness = (has_witness_str == "true");
+
             if (!IsValidTokenId(token_id)) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "invalid token id");
             }
 
-            std::string signer = g_token_ledger.GetSignerAddress(pwallet->GetName(), *wallet, witness);
             CAmount bal = g_token_ledger.Balance(signer, token_id);
             return ValueFromAmount(bal);
         }
@@ -4874,12 +4906,13 @@ static RPCHelpMan tokenapprove()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token identifier"},
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to approve (string to preserve decimal precision)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL, "", "true if successful"
         },
         RPCExamples{
-            HelpExampleCli("tokenapprove", "\"alice\" \"0xtokenid\" \"10.00000001\"")
+            HelpExampleCli("tokenapprove", "\"alice\" \"0xtokenid\" \"10.00000001\" false \"WIFKEY_HERE\"")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
@@ -4894,6 +4927,12 @@ static RPCHelpMan tokenapprove()
             std::string amountStr = request.params[2].get_str();
           
             std::string has_witness_str = request.params[3].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 4 && !request.params[4].isNull()) {
+                wif_key = request.params[4].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -4910,7 +4949,17 @@ static RPCHelpMan tokenapprove()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -4930,7 +4979,14 @@ static RPCHelpMan tokenapprove()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -4992,6 +5048,7 @@ static RPCHelpMan tokentransfer()
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to transfer (string to preserve decimal precision)"},
             {"memo", RPCArg::Type::STR, RPCArg::Optional::NO, "Optional memo string"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5013,6 +5070,12 @@ static RPCHelpMan tokentransfer()
             std::string amountStr = request.params[2].get_str();
             std::string memo = request.params[3].get_str();
             std::string has_witness_str = request.params[4].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 5 && !request.params[5].isNull()) {
+                wif_key = request.params[5].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5029,7 +5092,16 @@ static RPCHelpMan tokentransfer()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5050,7 +5122,14 @@ static RPCHelpMan tokentransfer()
             op.wallet_name = walletName;
             op.memo = memo;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5075,6 +5154,7 @@ static RPCHelpMan tokentransferfrom()
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to transfer (string to preserve decimal precision)"},
             {"memo", RPCArg::Type::STR, RPCArg::Optional::NO, "Optional memo string"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5097,6 +5177,12 @@ static RPCHelpMan tokentransferfrom()
             std::string amountStr = request.params[3].get_str();
             std::string memo = request.params[4].get_str();
             std::string has_witness_str = request.params[5].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 6 && !request.params[6].isNull()) {
+                wif_key = request.params[6].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5113,7 +5199,16 @@ static RPCHelpMan tokentransferfrom()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5135,7 +5230,14 @@ static RPCHelpMan tokentransferfrom()
             op.wallet_name = walletName;
             op.memo = memo;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5158,6 +5260,7 @@ static RPCHelpMan tokenincreaseallowance()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token id"},
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to increase (string to preserve decimal precision)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5178,6 +5281,12 @@ static RPCHelpMan tokenincreaseallowance()
             std::string token_id = request.params[1].get_str();
             std::string amountStr = request.params[2].get_str();
             std::string has_witness_str = request.params[3].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 4 && !request.params[4].isNull()) {
+                wif_key = request.params[4].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5194,7 +5303,17 @@ static RPCHelpMan tokenincreaseallowance()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5214,7 +5333,14 @@ static RPCHelpMan tokenincreaseallowance()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5237,6 +5363,7 @@ static RPCHelpMan tokendecreaseallowance()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token id"},
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to decrease (string to preserve decimal precision)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5257,6 +5384,12 @@ static RPCHelpMan tokendecreaseallowance()
             std::string token_id = request.params[1].get_str();
             std::string amountStr = request.params[2].get_str();
             std::string has_witness_str = request.params[3].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 4 && !request.params[4].isNull()) {
+                wif_key = request.params[4].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5273,7 +5406,17 @@ static RPCHelpMan tokendecreaseallowance()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5293,7 +5436,14 @@ static RPCHelpMan tokendecreaseallowance()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5315,6 +5465,7 @@ static RPCHelpMan tokenburn()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token identifier"},
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to burn (string to preserve decimal precision)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5334,6 +5485,12 @@ static RPCHelpMan tokenburn()
             std::string token_id = request.params[0].get_str();
             std::string amountStr = request.params[1].get_str();
             std::string has_witness_str = request.params[2].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 3 && !request.params[3].isNull()) {
+                wif_key = request.params[3].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5354,7 +5511,17 @@ static RPCHelpMan tokenburn()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5373,7 +5540,14 @@ static RPCHelpMan tokenburn()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5395,6 +5569,7 @@ static RPCHelpMan tokenmint()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token identifier"},
             {"amount", RPCArg::Type::STR, RPCArg::Optional::NO, "Amount to mint (string to preserve decimal precision)"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5414,6 +5589,12 @@ static RPCHelpMan tokenmint()
             std::string token_id = request.params[0].get_str();
             std::string amountStr = request.params[1].get_str();
             std::string has_witness_str = request.params[2].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 3 && !request.params[3].isNull()) {
+                wif_key = request.params[3].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5434,7 +5615,17 @@ static RPCHelpMan tokenmint()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5453,7 +5644,14 @@ static RPCHelpMan tokenmint()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -5475,6 +5673,7 @@ static RPCHelpMan tokentransferownership()
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "Token identifier"},
             {"new_owner", RPCArg::Type::STR, RPCArg::Optional::NO, "Address to assign ownership"},
             {"witness", RPCArg::Type::STR, RPCArg::Optional::NO, "Use witness signer"},
+            {"wif_key", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Optional WIF key for signing"},
         },
         RPCResult{
             RPCResult::Type::BOOL,
@@ -5494,6 +5693,12 @@ static RPCHelpMan tokentransferownership()
             std::string token_id = request.params[0].get_str();
             std::string new_owner = request.params[1].get_str();
             std::string has_witness_str = request.params[2].get_str();
+            
+            std::string wif_key = "";
+            if (request.params.size() > 3 && !request.params[3].isNull()) {
+                wif_key = request.params[3].get_str();
+            }
+
             if (has_witness_str != "true" && has_witness_str != "false") {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "has_witness must be 'true' or 'false'");
             }
@@ -5512,7 +5717,17 @@ static RPCHelpMan tokentransferownership()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
+
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5531,7 +5746,14 @@ static RPCHelpMan tokentransferownership()
             op.signer = signer;
             op.wallet_name = walletName;
 
-            if (!g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness)) {
+            bool signed_ok = false;
+            if (!wif_key.empty()) {
+                signed_ok = g_token_ledger.SignTokenOperationWithKey(op, wif_key);
+            } else {
+                signed_ok = g_token_ledger.SignTokenOperation(op, *wallet, walletName, witness);
+            }
+
+            if (!signed_ok) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
@@ -6012,7 +6234,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "rescanblockchain",                 &rescanblockchain,              {"start_height", "stop_height"} },
     { "wallet",             "send",                             &send,                          {"outputs","conf_target","estimate_mode","fee_rate","options"} },
     { "wallet",             "sendmany",                         &sendmany,                      {"dummy","amounts","minconf","comment","subtractfeefrom","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
-    { "wallet",             "bulktransfer",                    &bulktransfer,                {"csv","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
+    { "wallet",             "bulktransfer",                     &bulktransfer,                  {"csv","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
     { "wallet",             "sendtoaddress",                    &sendtoaddress,                 {"address","amount","comment","comment_to","subtractfeefromamount","replaceable","conf_target","estimate_mode","avoid_reuse","fee_rate","verbose"} },
     { "wallet",             "sethdseed",                        &sethdseed,                     {"newkeypool","seed"} },
     { "wallet",             "setlabel",                         &setlabel,                      {"address","label"} },
@@ -6027,28 +6249,28 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrase",                 &walletpassphrase,              {"passphrase","timeout"} },
     { "wallet",             "walletpassphrasechange",           &walletpassphrasechange,        {"oldpassphrase","newpassphrase"} },
     { "wallet",             "walletprocesspsbt",                &walletprocesspsbt,             {"psbt","sign","sighashtype","bip32derivs"} },
-    { "wallet",             "createtoken",                      &createtoken,                   {"amount","name","symbol","decimals","witness"} },
-    { "wallet",             "gettokenbalance",                  &gettokenbalance,               {"token","witness"} },
+    { "wallet",             "createtoken",                      &createtoken,                   {"amount","name","symbol","decimals","witness","wif_key"} },
+    { "wallet",             "gettokenbalance",                  &gettokenbalance,               {"token","witness","address"} },
     { "wallet",             "gettokenbalanceof",                &gettokenbalanceof,             {"token","address"} },
-    { "wallet",             "getsigneraddress",                 &getsigneraddress,             {} },
-    { "wallet",             "tokenapprove",                     &tokenapprove,                  {"spender","token","amount","witness"} },
+    { "wallet",             "getsigneraddress",                 &getsigneraddress,              {} },
+    { "wallet",             "tokenapprove",                     &tokenapprove,                  {"spender","token","amount","witness","wif_key"} },
     { "wallet",             "tokenallowance",                   &tokenallowance,                {"owner","spender","token"} },
-    { "wallet",             "tokentransfer",                    &tokentransfer,                 {"to","token","amount","memo","witness"} },
-    { "wallet",             "tokentransferfrom",                &tokentransferfrom,             {"from","to","token","amount","memo","witness"} },
-    { "wallet",             "tokenincreaseallowance",           &tokenincreaseallowance,        {"spender","token","amount","witness"} },
-    { "wallet",             "tokendecreaseallowance",           &tokendecreaseallowance,        {"spender","token","amount","witness"} },
-    { "wallet",             "tokenburn",                        &tokenburn,                     {"token","amount","witness"} },
-    { "wallet",             "tokenmint",                        &tokenmint,                     {"token","amount","witness"} },
-    { "wallet",             "tokentransferownership",           &tokentransferownership,        {"token","new_owner","witness"} },
+    { "wallet",             "tokentransfer",                    &tokentransfer,                 {"to","token","amount","memo","witness","wif_key"} },
+    { "wallet",             "tokentransferfrom",                &tokentransferfrom,             {"from","to","token","amount","memo","witness","wif_key"} },
+    { "wallet",             "tokenincreaseallowance",           &tokenincreaseallowance,        {"spender","token","amount","witness","wif_key"} },
+    { "wallet",             "tokendecreaseallowance",           &tokendecreaseallowance,        {"spender","token","amount","witness","wif_key"} },
+    { "wallet",             "tokenburn",                        &tokenburn,                     {"token","amount","witness","wif_key"} },
+    { "wallet",             "tokenmint",                        &tokenmint,                     {"token","amount","witness","wif_key"} },
+    { "wallet",             "tokentransferownership",           &tokentransferownership,        {"token","new_owner","witness","wif_key"} },
     { "wallet",             "tokentotalsupply",                 &tokentotalsupply,              {"token"} },
     { "wallet",             "getgovernancebalance",             &getgovernancebalance,          {} },
     { "wallet",             "my_tokens",                        &my_tokens,                     {"witness"} },
     { "wallet",             "all_tokens",                       &all_tokens,                    {} },
     { "wallet",             "token_history",                    &token_history,                 {"token","filter"} },
     { "wallet",             "token_meta",                       &token_meta,                    {"token"} },
-    { "wallet",             "token_tx_memo",                   &token_tx_memo,               {"token","txid"} },
+    { "wallet",             "token_tx_memo",                    &token_tx_memo,                 {"token","txid"} },
     { "wallet",             "rescan_tokentx",                   &rescan_tokentx,                {"from_height"} },
-    { "wallet",             "gettotalsubsidy",                 &gettotalsubsidy,           {} },
+    { "wallet",             "gettotalsubsidy",                  &gettotalsubsidy,               {} },
 };
 // clang-format on
     return MakeSpan(commands);
