@@ -4732,7 +4732,7 @@ static RPCHelpMan createtoken()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -4955,7 +4955,7 @@ static RPCHelpMan tokenapprove()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -5092,7 +5092,16 @@ static RPCHelpMan tokentransfer()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5190,7 +5199,16 @@ static RPCHelpMan tokentransferfrom()
             }
 
             std::string walletName = pwallet->GetName();
-            std::string signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            std::string signer;
+            if (!wif_key.empty()) {
+                CKey key = DecodeSecret(wif_key);
+                if (!key.IsValid()) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
+                }
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
+            } else {
+                signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
+            }
             if (signer.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Unable to determine signer address");
             }
@@ -5291,7 +5309,7 @@ static RPCHelpMan tokenincreaseallowance()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -5394,7 +5412,7 @@ static RPCHelpMan tokendecreaseallowance()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -5499,7 +5517,7 @@ static RPCHelpMan tokenburn()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -5603,7 +5621,7 @@ static RPCHelpMan tokenmint()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
@@ -5705,7 +5723,7 @@ static RPCHelpMan tokentransferownership()
                 if (!key.IsValid()) {
                     throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid WIF key");
                 }
-                signer = EncodeDestination(PKHash(key.GetPubKey()));
+                signer = EncodeDestination(WitnessV0KeyHash(key.GetPubKey()));
             } else {
                 signer = g_token_ledger.GetSignerAddress(walletName, *wallet, witness);
             }
