@@ -134,32 +134,71 @@ class ITSLClient:
         if from_height is not None: params.append(from_height)
         return self._call_rpc("rescan_tokentx", params)
 
+def _prompt_confirmation(action_desc):
+    print("\n" + "="*60)
+    print("⚠️  TRANSACTION REVIEW ⚠️")
+    print("="*60)
+    print(action_desc)
+    print("-" * 60)
+    
+    while True:
+        resp = input("Are you absolutely sure you want to broadcast this? (y/N): ").strip().lower()
+        if resp in ['y', 'yes']:
+            return True
+        elif resp in ['n', 'no', '']:
+            return False
+        print("Please answer y or n.")
+
 def _execute_command(client, args):
     if args.command == "getsigneraddress":
         return client.get_signer_address()
     elif args.command == "createtoken":
+        if not args.yes:
+            desc = f"Action:        CREATE TOKEN\nToken:         {args.name} ({args.symbol})\nAmount:        {args.amount} (Decimals: {args.decimals})\nWitness Sig:   {args.witness}\nWIF Key:       {'Provided' if args.wif_key else 'None (Using Node Wallet)'}"
+            if not _prompt_confirmation(desc):
+                print("Operation cancelled.")
+                import sys; sys.exit(0)
         return client.create_token(args.amount, args.name, args.symbol, args.decimals, args.witness, args.wif_key)
     elif args.command == "gettokenbalance":
         return client.get_token_balance(args.token, args.witness, args.address)
     elif args.command == "gettokenbalanceof":
         return client.get_token_balance_of(args.token, args.address)
     elif args.command == "tokenapprove":
+        if not args.yes:
+            desc = f"Action:        APPROVE SPENDER\nSpender:       {args.spender}\nToken:         {args.token}\nAmount:        {args.amount}\nWitness Sig:   {args.witness}\nWIF Key:       {'Provided' if args.wif_key else 'None'}"
+            if not _prompt_confirmation(desc): return {"status": "cancelled"}
         return client.token_approve(args.spender, args.token, args.amount, args.witness, args.wif_key)
     elif args.command == "tokenallowance":
         return client.token_allowance(args.owner, args.spender, args.token)
     elif args.command == "tokentransfer":
+        if not args.yes:
+            desc = f"Action:        TRANSFER TOKENS\nDestination:   {args.to}\nToken ID:      {args.token}\nAmount:        {args.amount}\nMemo:          {args.memo}\nWitness Sig:   {args.witness}\nWIF Key:       {'Provided' if args.wif_key else 'None'}"
+            if not _prompt_confirmation(desc): return {"status": "cancelled"}
         return client.token_transfer(args.to, args.token, args.amount, args.memo, args.witness, args.wif_key)
     elif args.command == "tokentransferfrom":
+        if not args.yes:
+            desc = f"Action:        TRANSFER FROM (ALLOWANCE)\nFrom:          {args.from_addr}\nTo:            {args.to}\nToken ID:      {args.token}\nAmount:        {args.amount}\nMemo:          {args.memo}\nWitness Sig:   {args.witness}\nWIF Key:       {'Provided' if args.wif_key else 'None'}"
+            if not _prompt_confirmation(desc): return {"status": "cancelled"}
         return client.token_transfer_from(args.from_addr, args.to, args.token, args.amount, args.memo, args.witness, args.wif_key)
     elif args.command == "tokenincreaseallowance":
+        if not args.yes:
+            if not _prompt_confirmation(f"Action: INCREASE ALLOWANCE\nSpender: {args.spender}\nToken: {args.token}\nAmount: +{args.amount}"): return {"status": "cancelled"}
         return client.token_increase_allowance(args.spender, args.token, args.amount, args.witness, args.wif_key)
     elif args.command == "tokendecreaseallowance":
+        if not args.yes:
+            if not _prompt_confirmation(f"Action: DECREASE ALLOWANCE\nSpender: {args.spender}\nToken: {args.token}\nAmount: -{args.amount}"): return {"status": "cancelled"}
         return client.token_decrease_allowance(args.spender, args.token, args.amount, args.witness, args.wif_key)
     elif args.command == "tokenburn":
+        if not args.yes:
+            if not _prompt_confirmation(f"Action: BURN TOKENS (DESTROY FOREVER)\nToken: {args.token}\nAmount: {args.amount}"): return {"status": "cancelled"}
         return client.token_burn(args.token, args.amount, args.witness, args.wif_key)
     elif args.command == "tokenmint":
+        if not args.yes:
+            if not _prompt_confirmation(f"Action: MINT TOKENS\nToken: {args.token}\nAmount: {args.amount}"): return {"status": "cancelled"}
         return client.token_mint(args.token, args.amount, args.witness, args.wif_key)
     elif args.command == "tokentransferownership":
+        if not args.yes:
+            if not _prompt_confirmation(f"Action: TRANSFER OPERATOR OWNERSHIP\nToken: {args.token}\nNew Owner: {args.new_owner}\nWARNING: You will lose operator rights!"): return {"status": "cancelled"}
         return client.token_transfer_ownership(args.token, args.new_owner, args.witness, args.wif_key)
     elif args.command == "tokentotalsupply":
         return client.token_total_supply(args.token)
@@ -190,6 +229,7 @@ def main():
     parser.add_argument("--rpchost", type=str, default="127.0.0.1", help="RPC host (default: 127.0.0.1)")
     parser.add_argument("--rpcport", type=int, default=17100, help="RPC port (default: 17100)")
     parser.add_argument("--wallet", type=str, default="", help="Wallet name (required if multiple wallets are loaded)")
+    parser.add_argument("-y", "--yes", action="store_true", help="Skip interactive confirmation prompts for state-modifying commands")
     
     subparsers = parser.add_subparsers(dest="command", required=True, help="ITSL Commands")
 
