@@ -309,6 +309,7 @@ def _execute_command(client, args):
             print(f"[*] Derived Segwit Address from WIF: {address}")
             
             all_known_tokens = client.all_tokens()
+            print(f"DEBUG: Retrieved {len(all_known_tokens) if isinstance(all_known_tokens, list) else 'ERR'} tokens from all_tokens()")
             if isinstance(all_known_tokens, dict) and "error" in all_known_tokens:
                 return all_known_tokens # return rpc error
 
