@@ -6216,7 +6216,7 @@ static const CRPCCommand commands[] =
     { "wallet",             "rescanblockchain",                 &rescanblockchain,              {"start_height", "stop_height"} },
     { "wallet",             "send",                             &send,                          {"outputs","conf_target","estimate_mode","fee_rate","options"} },
     { "wallet",             "sendmany",                         &sendmany,                      {"dummy","amounts","minconf","comment","subtractfeefrom","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
-    { "wallet",             "bulktransfer",                    &bulktransfer,                {"csv","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
+    { "wallet",             "bulktransfer",                     &bulktransfer,                  {"csv","replaceable","conf_target","estimate_mode","fee_rate","verbose"} },
     { "wallet",             "sendtoaddress",                    &sendtoaddress,                 {"address","amount","comment","comment_to","subtractfeefromamount","replaceable","conf_target","estimate_mode","avoid_reuse","fee_rate","verbose"} },
     { "wallet",             "sethdseed",                        &sethdseed,                     {"newkeypool","seed"} },
     { "wallet",             "setlabel",                         &setlabel,                      {"address","label"} },
@@ -6231,10 +6231,10 @@ static const CRPCCommand commands[] =
     { "wallet",             "walletpassphrase",                 &walletpassphrase,              {"passphrase","timeout"} },
     { "wallet",             "walletpassphrasechange",           &walletpassphrasechange,        {"oldpassphrase","newpassphrase"} },
     { "wallet",             "walletprocesspsbt",                &walletprocesspsbt,             {"psbt","sign","sighashtype","bip32derivs"} },
-    { "wallet",             "createtoken",                      &createtoken,                   {"amount","name","symbol","decimals","witness"} },
+    { "wallet",             "createtoken",                      &createtoken,                   {"amount","name","symbol","decimals","witness","wif_key"} },
     { "wallet",             "gettokenbalance",                  &gettokenbalance,               {"token","witness"} },
     { "wallet",             "gettokenbalanceof",                &gettokenbalanceof,             {"token","address"} },
-    { "wallet",             "getsigneraddress",                 &getsigneraddress,             {} },
+    { "wallet",             "getsigneraddress",                 &getsigneraddress,              {} },
     { "wallet",             "tokenapprove",                     &tokenapprove,                  {"spender","token","amount","witness","wif_key"} },
     { "wallet",             "tokenallowance",                   &tokenallowance,                {"owner","spender","token"} },
     { "wallet",             "tokentransfer",                    &tokentransfer,                 {"to","token","amount","memo","witness","wif_key"} },
@@ -6250,9 +6250,9 @@ static const CRPCCommand commands[] =
     { "wallet",             "all_tokens",                       &all_tokens,                    {} },
     { "wallet",             "token_history",                    &token_history,                 {"token","filter"} },
     { "wallet",             "token_meta",                       &token_meta,                    {"token"} },
-    { "wallet",             "token_tx_memo",                   &token_tx_memo,               {"token","txid"} },
+    { "wallet",             "token_tx_memo",                    &token_tx_memo,                 {"token","txid"} },
     { "wallet",             "rescan_tokentx",                   &rescan_tokentx,                {"from_height"} },
-    { "wallet",             "gettotalsubsidy",                 &gettotalsubsidy,           {} },
+    { "wallet",             "gettotalsubsidy",                  &gettotalsubsidy,               {} },
 };
 // clang-format on
     return MakeSpan(commands);
