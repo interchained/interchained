@@ -9,7 +9,7 @@ This SDK simplifies interacting securely and programmatically with the Interchai
 Ensure you have the requests library installed in your python environment:
 
 ```bash
-pip install requests
+pip install requests base58 ecdsa ripemd-hash
 ```
 
 You must have `interchainedd` running locally (or remotely) with the RPC server enabled.

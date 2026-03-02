@@ -137,6 +137,99 @@ class ITSLClient:
         if from_height is not None: params.append(from_height)
         return self._call_rpc("rescan_tokentx", params)
 
+def ripemd160(data_in: bytes) -> bytes:
+    # RIPEMD-160 implementation in pure python
+    # Source: https://github.com/jb55/python-ripemd160
+    
+    def F(x: int, y: int, z: int) -> int: return (x ^ y ^ z)
+    def G(x: int, y: int, z: int) -> int: return (x & y) | (~x & z)
+    def H(x: int, y: int, z: int) -> int: return (x | ~y) ^ z
+    def I(x: int, y: int, z: int) -> int: return (x & z) | (y & ~z)
+    def J(x: int, y: int, z: int) -> int: return x ^ (y | ~z)
+    
+    def rol(x: int, n: int) -> int: return ((x << n) & 0xffffffff) | (x >> (32 - n))
+    
+    h0: int = 0x67452301
+    h1: int = 0xefcdab89
+    h2: int = 0x98badcfe
+    h3: int = 0x10325476
+    h4: int = 0xc3d2e1f0
+    
+    # Pad message
+    data = bytearray(data_in)
+    ml = len(data) * 8
+    data += b'\x80'
+    while (len(data) % 64) != 56:
+        data += b'\x00'
+    data += ml.to_bytes(8, 'little')
+    
+    r1 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+          7, 4, 13, 1, 10, 6, 15, 3, 12, 0, 9, 5, 2, 14, 11, 8,
+          3, 10, 14, 4, 9, 15, 8, 1, 2, 7, 0, 6, 13, 11, 5, 12,
+          1, 9, 11, 10, 0, 8, 12, 4, 13, 3, 7, 15, 14, 5, 6, 2,
+          4, 0, 5, 9, 7, 12, 2, 10, 14, 1, 3, 8, 11, 6, 15, 13]
+    r2 = [5, 14, 7, 0, 9, 2, 11, 4, 13, 6, 15, 8, 1, 10, 3, 12,
+          6, 11, 3, 7, 0, 13, 5, 10, 14, 15, 8, 12, 4, 9, 1, 2,
+          15, 5, 1, 3, 7, 14, 6, 9, 11, 8, 12, 2, 10, 0, 4, 13,
+          8, 6, 4, 1, 3, 11, 15, 0, 5, 12, 2, 13, 9, 7, 10, 14,
+          12, 15, 10, 4, 1, 5, 8, 7, 6, 2, 13, 14, 0, 3, 9, 11]
+    
+    s1 = [11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8,
+          7, 6, 8, 13, 11, 9, 7, 15, 7, 12, 15, 9, 11, 7, 13, 12,
+          11, 13, 6, 7, 14, 9, 13, 15, 14, 8, 13, 6, 5, 12, 7, 5,
+          11, 12, 14, 15, 14, 15, 9, 8, 9, 14, 5, 6, 8, 6, 5, 12,
+          9, 15, 5, 11, 6, 8, 13, 12, 5, 12, 13, 14, 11, 8, 5, 6]
+    s2 = [8, 9, 9, 11, 13, 15, 15, 5, 7, 7, 8, 11, 14, 14, 12, 6,
+          9, 13, 15, 7, 12, 8, 9, 11, 7, 7, 12, 7, 6, 15, 13, 11,
+          9, 7, 15, 11, 8, 6, 6, 14, 12, 13, 5, 14, 13, 13, 7, 5,
+          15, 5, 8, 11, 14, 14, 6, 14, 6, 9, 12, 9, 12, 5, 15, 8,
+          8, 5, 12, 9, 12, 5, 14, 6, 8, 13, 6, 5, 15, 13, 11, 11]
+    
+    for i in range(0, len(data), 64):
+        chunk = data[i:i+64]
+        words = [int.from_bytes(chunk[j:j+4], 'little') for j in range(0, 64, 4)]
+        
+        A, B, C, D, E = h0, h1, h2, h3, h4
+        A_, B_, C_, D_, E_ = h0, h1, h2, h3, h4
+        
+        for j in range(80):
+            if j < 16:
+                t = (A + F(B, C, D) + words[r1[j]] + 0x00000000) & 0xffffffff
+                t_ = (A_ + J(B_, C_, D_) + words[r2[j]] + 0x50a28be6) & 0xffffffff
+            elif j < 32:
+                t = (A + G(B, C, D) + words[r1[j]] + 0x5a827999) & 0xffffffff
+                t_ = (A_ + I(B_, C_, D_) + words[r2[j]] + 0x5c4dd124) & 0xffffffff
+            elif j < 48:
+                t = (A + H(B, C, D) + words[r1[j]] + 0x6ed9eba1) & 0xffffffff
+                t_ = (A_ + H(B_, C_, D_) + words[r2[j]] + 0x6d703ef3) & 0xffffffff
+            elif j < 64:
+                t = (A + I(B, C, D) + words[r1[j]] + 0x8f1bbcdc) & 0xffffffff
+                t_ = (A_ + G(B_, C_, D_) + words[r2[j]] + 0x7a6d76e9) & 0xffffffff
+            else:
+                t = (A + J(B, C, D) + words[r1[j]] + 0xa953fd4e) & 0xffffffff
+                t_ = (A_ + F(B_, C_, D_) + words[r2[j]] + 0x00000000) & 0xffffffff
+                
+            A = E
+            E = D
+            D = rol(C, 10)
+            C = B
+            B = (t + rol(t, s1[j])) & 0xffffffff
+            
+            A_ = E_
+            E_ = D_
+            D_ = rol(C_, 10)
+            C_ = B_
+            B_ = (t_ + rol(t_, s2[j])) & 0xffffffff
+            
+        t = (h1 + C + D_) & 0xffffffff
+        h1 = (h2 + D + E_) & 0xffffffff
+        h2 = (h3 + E + A_) & 0xffffffff
+        h3 = (h4 + A + B_) & 0xffffffff
+        h4 = (h0 + B + C_) & 0xffffffff
+        h0 = t
+        
+    return b''.join(x.to_bytes(4, 'little') for x in (h0, h1, h2, h3, h4))
+
 def _bech32_polymod(values):
     generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233a1, 0x2a1462b3]
     chk = 1
@@ -195,9 +288,17 @@ def get_segwit_address_from_wif(wif: str) -> str:
     
     # 3. Hash160 (RIPEMD160(SHA256(pubkey)))
     sha256_hash = hashlib.sha256(pubkey_compressed).digest()
-    h160 = hashlib.new('ripemd160')
-    h160.update(sha256_hash)
-    pubkey_hash = h160.digest()
+    try:
+        h160 = hashlib.new('ripemd160')
+        h160.update(sha256_hash)
+        pubkey_hash = h160.digest()
+    except ValueError:
+        try:
+            h160 = hashlib.new('rmd160')
+            h160.update(sha256_hash)
+            pubkey_hash = h160.digest()
+        except ValueError:
+            pubkey_hash = ripemd160(sha256_hash)
     
     # 4. Bech32 Encode (WitnessV0KeyHash)
     # Version 0 (0x00) + pubkey_hash converted to 5-bit groups
