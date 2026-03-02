@@ -204,8 +204,7 @@ private:
     bool Burn(const std::string& wallet, const std::string& token, CAmount amount);
     bool Mint(const std::string& wallet, const std::string& token, CAmount amount);
     bool TransferOwnership(const std::string& from, const std::string& to, const std::string& token);
-    bool SendGovernanceFee(const std::string& wallet, CAmount fee);
-    bool RecordOperationOnChain(const std::string& wallet, const TokenOperation& op);
+    bool BroadcastOperation(const std::string& wallet, const TokenOperation& op, CAmount govFee);
 
     mutable RecursiveMutex m_mutex;
     std::map<std::pair<std::string, std::string>, CAmount> m_balances;
