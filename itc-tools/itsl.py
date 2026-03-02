@@ -3,6 +3,9 @@ import argparse
 import requests
 import json
 import base64
+import hashlib
+import base58
+import ecdsa
 
 class ITSLClient:
     def __init__(self, rpc_user, rpc_password, rpc_host="127.0.0.1", rpc_port=17100, wallet_name=""):
@@ -134,6 +137,76 @@ class ITSLClient:
         if from_height is not None: params.append(from_height)
         return self._call_rpc("rescan_tokentx", params)
 
+def _bech32_polymod(values):
+    generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233a1, 0x2a1462b3]
+    chk = 1
+    for value in values:
+        top = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ value
+        for i in range(5):
+            chk ^= generator[i] if ((top >> i) & 1) else 0
+    return chk
+
+def _bech32_hrp_expand(hrp):
+    return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+
+def _bech32_create_checksum(hrp, data):
+    values = _bech32_hrp_expand(hrp) + data
+    polymod = _bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+
+def _bech32_encode(hrp, data):
+    combined = data + _bech32_create_checksum(hrp, data)
+    return hrp + '1' + ''.join("qpzry9x8gf2tvdw0s3jn54khce6mua7l"[d] for d in combined)
+
+def _convertbits(data, frombits, tobits, pad=True):
+    acc = 0
+    bits = 0
+    ret = []
+    maxv = (1 << tobits) - 1
+    max_acc = (1 << (frombits + tobits - 1)) - 1
+    for value in data:
+        acc = ((acc << frombits) | value) & max_acc
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            ret.append((acc >> bits) & maxv)
+    if pad:
+        if bits: ret.append((acc << (tobits - bits)) & maxv)
+    elif bits >= frombits or ((acc << (tobits - bits)) & maxv):
+        return None
+    return ret
+
+def get_segwit_address_from_wif(wif: str) -> str:
+    # 1. Decode Base58Check
+    decoded = base58.b58decode_check(wif)
+    # the first byte is version, next 32 bytes are private key, 
+    # last byte (0x01) indicates compressed pubkey
+    privkey_bytes = decoded[1:33]
+    
+    # 2. Get compressed public key (secp256k1)
+    sk = ecdsa.SigningKey.from_string(privkey_bytes, curve=ecdsa.SECP256k1)
+    vk = sk.get_verifying_key()
+    pubkey_uncompressed = vk.to_string()
+    
+    # Compress it
+    prefix = b'\x02' if pubkey_uncompressed[-1] % 2 == 0 else b'\x03'
+    pubkey_compressed = prefix + pubkey_uncompressed[:32]
+    
+    # 3. Hash160 (RIPEMD160(SHA256(pubkey)))
+    sha256_hash = hashlib.sha256(pubkey_compressed).digest()
+    h160 = hashlib.new('ripemd160')
+    h160.update(sha256_hash)
+    pubkey_hash = h160.digest()
+    
+    # 4. Bech32 Encode (WitnessV0KeyHash)
+    # Version 0 (0x00) + pubkey_hash converted to 5-bit groups
+    hrp = "itc" 
+    witprog = _convertbits(pubkey_hash, 8, 5)
+    if witprog is None:
+        raise ValueError("Invalid witness program")
+    return _bech32_encode(hrp, [0] + witprog)
+
 def _prompt_confirmation(action_desc):
     print("\n" + "="*60)
     print("⚠️  TRANSACTION REVIEW ⚠️")
@@ -150,6 +223,9 @@ def _prompt_confirmation(action_desc):
         print("Please answer y or n.")
 
 def _execute_command(client, args):
+    if hasattr(args, 'wif_key') and args.wif_key:
+        args.witness = True
+
     if args.command == "getsigneraddress":
         return client.get_signer_address()
     elif args.command == "createtoken":
@@ -160,6 +236,8 @@ def _execute_command(client, args):
                 import sys; sys.exit(0)
         return client.create_token(args.amount, args.name, args.symbol, args.decimals, args.witness, args.wif_key)
     elif args.command == "gettokenbalance":
+        if hasattr(args, 'wif_key') and args.wif_key and not args.address:
+            args.address = get_segwit_address_from_wif(args.wif_key)
         return client.get_token_balance(args.token, args.witness, args.address)
     elif args.command == "gettokenbalanceof":
         return client.get_token_balance_of(args.token, args.address)
@@ -205,6 +283,10 @@ def _execute_command(client, args):
     elif args.command == "getgovernancebalance":
         return client.get_governance_balance()
     elif args.command == "my_tokens":
+        if hasattr(args, 'wif_key') and args.wif_key:
+            address = get_segwit_address_from_wif(args.wif_key)
+            print(f"[*] Derived Segwit Address from WIF: {address}")
+            return client._call_rpc("gettokenbalanceof", ["*", address]) # gettokenbalanceof natively doesn't support wildcards yet, but we will print address
         return client.my_tokens(args.witness)
     elif args.command == "all_tokens":
         return client.all_tokens()
@@ -246,10 +328,11 @@ def main():
     parser_create.add_argument("--wif-key", type=str, help="Optional WIF key for signing")
 
     # Command: gettokenbalance
-    parser_getbal = subparsers.add_parser("gettokenbalance", help="Get token balance for this wallet")
+    parser_getbal = subparsers.add_parser("gettokenbalance", help="Get token balance for this wallet (or WIF key)")
     parser_getbal.add_argument("token", type=str, help="Token ID")
     parser_getbal.add_argument("--witness", action="store_true", help="Use witness signer")
     parser_getbal.add_argument("--address", type=str, help="Optional address (if omitted, uses wallet default)")
+    parser_getbal.add_argument("--wif-key", type=str, help="Derive address from WIF key")
 
     # Command: gettokenbalanceof
     parser_getbalof = subparsers.add_parser("gettokenbalanceof", help="Get token balance of a specific address")
@@ -334,8 +417,9 @@ def main():
     subparsers.add_parser("getgovernancebalance", help="Get accumulated network token fees")
 
     # Command: my_tokens
-    parser_my = subparsers.add_parser("my_tokens", help="List all tokens owned by this wallet")
+    parser_my = subparsers.add_parser("my_tokens", help="List all tokens owned by this wallet (or WIF key)")
     parser_my.add_argument("--witness", action="store_true", help="Use witness signer")
+    parser_my.add_argument("--wif-key", type=str, help="List tokens owned by this WIF key")
 
     # Command: all_tokens
     subparsers.add_parser("all_tokens", help="List all known tokens in the ledger")
