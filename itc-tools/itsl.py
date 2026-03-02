@@ -231,7 +231,7 @@ def ripemd160(data_in: bytes) -> bytes:
     return b''.join(x.to_bytes(4, 'little') for x in (h0, h1, h2, h3, h4))
 
 def _bech32_polymod(values):
-    generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233a1, 0x2a1462b3]
+    generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
     chk = 1
     for value in values:
         top = chk >> 25
@@ -276,18 +276,22 @@ def get_segwit_address_from_wif(wif: str) -> str:
     # the first byte is version, next 32 bytes are private key, 
     # last byte (0x01) indicates compressed pubkey
     privkey_bytes = decoded[1:33]
+    is_compressed = len(decoded) == 34 and decoded[33] == 1
     
-    # 2. Get compressed public key (secp256k1)
+    # 2. Get public key (secp256k1)
     sk = ecdsa.SigningKey.from_string(privkey_bytes, curve=ecdsa.SECP256k1)
     vk = sk.get_verifying_key()
     pubkey_uncompressed = vk.to_string()
     
-    # Compress it
-    prefix = b'\x02' if pubkey_uncompressed[-1] % 2 == 0 else b'\x03'
-    pubkey_compressed = prefix + pubkey_uncompressed[:32]
+    # Compress it based on WIF flag
+    if is_compressed:
+        prefix = b'\x02' if pubkey_uncompressed[-1] % 2 == 0 else b'\x03'
+        pubkey_final = prefix + pubkey_uncompressed[:32]
+    else:
+        pubkey_final = b'\x04' + pubkey_uncompressed
     
     # 3. Hash160 (RIPEMD160(SHA256(pubkey)))
-    sha256_hash = hashlib.sha256(pubkey_compressed).digest()
+    sha256_hash = hashlib.sha256(pubkey_final).digest()
     try:
         h160 = hashlib.new('ripemd160')
         h160.update(sha256_hash)
@@ -396,12 +400,14 @@ def _execute_command(client, args):
             for token_info in all_known_tokens:
                 try:
                     bal_str = client.get_token_balance_of(token_info["address"], address)
+                    print(f"DEBUG: Token {token_info['address']} Balance: '{bal_str}' Type: {type(bal_str)}")
                     if isinstance(bal_str, dict) and "error" in bal_str:
                         continue
                     if float(bal_str) > 0:
                         token_info["balance"] = bal_str
                         held_tokens.append(token_info)
                 except Exception as e:
+                    print(f"DEBUG: Exception on Token {token_info['address']}: {e}")
                     # Ignore tokens that fail to fetch balance (e.g. invalid token ID error from node)
                     continue
             return held_tokens
