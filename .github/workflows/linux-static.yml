@@ -1,9 +1,12 @@
-name: Linux Builds (wallet + miniupnpc) 
+name: Linux Build (portable glibc) — wallet + miniupnpc + zmq
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ "v*", "release-*" ]
+    branches:
+      - "**"
+    tags:
+      - "v*"
+      - "release-*"
   workflow_dispatch:
 
 permissions:
@@ -11,39 +14,24 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.flavor.name }} • ${{ matrix.arch }}
+    name: glibc-portable • x86_64
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [ x86_64 ]
-        flavor:
-          - name: musl-static
-            container: alpine:3.20
-          - name: glibc-portable
-            container: ubuntu:20.04
 
-    container: ${{ matrix.flavor.container }}
+    # Build inside Ubuntu 20.04 for maximum downstream compatibility
+    container: ubuntu:20.04
 
     env:
       ARTIFACT_DIR: out
-      PKG_NAME: interchained-${{ matrix.flavor.name }}-${{ matrix.arch }}-${{ github.sha }}
+      PKG_NAME: interchained-glibc-portable-x86_64-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
       D_BIN: src/interchainedd
       CLI_BIN: src/interchained-cli
 
     steps:
-      - name: Ensure git is available in container
+      - name: Install base deps (git + certs)
         run: |
-          if command -v apt-get >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
-          elif command -v apk >/dev/null 2>&1; then
-            apk add --no-cache git ca-certificates
-          elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates
-          else
-            echo "No supported package manager found"; exit 1
-          fi
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates
           git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
 
       - name: Checkout (with submodules)
@@ -57,136 +45,16 @@ jobs:
           J=$( (command -v nproc >/dev/null && nproc) || getconf _NPROCESSORS_ONLN || echo 1 )
           echo "JOBS=$J" >> "$GITHUB_ENV"
 
-      # ===========================
-      # 1) Alpine MUSL — FULLY STATIC (wallet + miniupnpc, ZMQ OFF)
-      # ===========================
-      - name: Install deps (Alpine musl)
-        if: matrix.flavor.name == 'musl-static'
-        run: |
-          apk update
-          apk add --no-cache \
-            bash coreutils build-base autoconf automake libtool pkgconf \
-            boost-dev boost-static \
-            libevent-dev libevent-static \
-            openssl-dev openssl-libs-static \
-            file git xz curl
-
-      - name: Build Berkeley DB 4.8 (musl, static) from observerdev/db-4.8.30
-        if: matrix.flavor.name == 'musl-static'
-        env:
-          BDB_PREFIX: ${{ github.workspace }}/db4
-        run: |
-          set -eux
-          git clone --depth=1 https://github.com/observerdev/db-4.8.30.git bdb-src
-          # Fix builtin clash in atomic.h
-          sed -i 's/\b__atomic_compare_exchange\b/__db_atomic_compare_exchange/g' bdb-src/dbinc/atomic.h
-          cd bdb-src/build_unix
-          CFLAGS="-O2 -fPIC -Wno-builtin-declaration-mismatch -Wno-format-security" \
-          ../dist/configure --prefix="$BDB_PREFIX" --enable-cxx --disable-shared --with-pic
-          make -j"$JOBS"
-          make install
-
-          ls -lah "$BDB_PREFIX"/lib "$BDB_PREFIX"/include || true
-          cd "$BDB_PREFIX"/lib
-
-          # Provide both versioned and unversioned names (just in case)
-          for base in db db_cxx; do
-            [ -f "lib${base}.a" ] && [ ! -f "lib${base}-4.8.a" ] && ln -s "lib${base}.a" "lib${base}-4.8.a" || true
-            [ -f "lib${base}-4.8.a" ] && [ ! -f "lib${base}.a" ] && ln -s "lib${base}-4.8.a" "lib${base}.a" || true
-          done
-
-          # Detect the actual archives we have and export absolute paths for linking
-          DB_CXX="$(ls -1 libdb_cxx-4.8.a libdb_cxx.a 2>/dev/null | head -n1)"
-          DB_BASE="$(ls -1 libdb-4.8.a     libdb.a     2>/dev/null | head -n1)"
-          echo "Resolved BDB libs: $DB_CXX $DB_BASE"
-          echo "BDB_LIBS_FILES=$BDB_PREFIX/lib/$DB_CXX $BDB_PREFIX/lib/$DB_BASE" >> "$GITHUB_ENV"
-
-          ls -lah
-
-      - name: Build miniupnpc (musl, static)
-        if: matrix.flavor.name == 'musl-static'
-        env:
-          LOCAL_PREFIX: /usr/local
-        run: |
-          set -eux
-          git clone --depth=1 https://github.com/miniupnp/miniupnp.git
-          cd miniupnp/miniupnpc
-          make -j"$JOBS" SHARED=0
-          install -d "$LOCAL_PREFIX/lib" "$LOCAL_PREFIX/include/miniupnpc"
-          install -m 0644 build/libminiupnpc.a "$LOCAL_PREFIX/lib/"
-          [ -f build/libminiupnpc.so ] && install -m 0755 build/libminiupnpc.so "$LOCAL_PREFIX/lib/" || true
-          install -m 0644 include/*.h "$LOCAL_PREFIX/include/miniupnpc/"
-          ls -lah "$LOCAL_PREFIX/lib" "$LOCAL_PREFIX/include/miniupnpc"
-
-      - name: Patch miniupnpc API call (5→7 args)
-        run: |
-          set -eux
-          f=src/net.cpp
-          if grep -qE 'UPNP_GetValidIGD\(devlist,\s*&urls,\s*&data,\s*lanaddr,\s*sizeof\(lanaddr\)\)' "$f"; then
-            perl -0777 -pe 's/UPNP_GetValidIGD\(devlist,\s*&urls,\s*&data,\s*lanaddr,\s*sizeof\(lanaddr\)\)/UPNP_GetValidIGD(devlist, \&urls, \&data, lanaddr, sizeof(lanaddr), NULL, 0)/g' -i "$f"
-          fi
-          grep -n 'UPNP_GetValidIGD' "$f" || true
-
-      - name: Configure & Build (Alpine musl static, C++14)
-        if: matrix.flavor.name == 'musl-static'
-        env:
-          BDB_PREFIX: ${{ github.workspace }}/db4
-          BDB_CFLAGS: "-I${{ github.workspace }}/db4/include"
-          CPPFLAGS: "-I${{ github.workspace }}/db4/include -I/usr/local/include"
-          LDFLAGS: "-L${{ github.workspace }}/db4/lib -L/usr/local/lib -static"
-          CFLAGS: "-O2"
-          CXXFLAGS: "-O2 -std=c++14"
-        run: |
-          set -eux
-          ./autogen.sh
-          export CPATH="$BDB_PREFIX/include:${CPATH:-}"
-          [ -d "$BDB_PREFIX/include/db4" ] && export CPATH="$BDB_PREFIX/include/db4:$CPATH"
-
-          # Prefer absolute archives; fallback to -l if detection somehow failed
-          if [ -n "${BDB_LIBS_FILES:-}" ]; then
-            export BDB_LIBS="${BDB_LIBS_FILES} -lpthread"
-          else
-            export BDB_LIBS="-L${BDB_PREFIX}/lib -ldb_cxx-4.8 -ldb-4.8 -lpthread"
-          fi
-
-          ./configure \
-            --enable-wallet \
-            --with-incompatible-bdb \
-            --without-gui \
-            --disable-bench \
-            --disable-tests \
-            --with-miniupnpc \
-            --disable-zmq \
-          || { echo "=== config.log (alpine) ==="; cat config.log || true; exit 1; }
-
-          echo "Using BDB_CFLAGS=$BDB_CFLAGS"
-          echo "Using BDB_LIBS=$BDB_LIBS"
-
-          make -j"$JOBS"
-          test -f "$D_BIN" && test -f "$CLI_BIN"
-
-      - name: Verify static linkage (Alpine)
-        if: matrix.flavor.name == 'musl-static'
-        run: |
-          file "$D_BIN" "$CLI_BIN"
-          ldd "$D_BIN" || true
-          ldd "$CLI_BIN" || true
-
-      # ==================================
-      # 2) Ubuntu 20.04 — GLIBC PORTABLE (wallet + miniupnpc + ZMQ)
-      # ==================================
-      - name: Install deps (Ubuntu 20.04)
-        if: matrix.flavor.name == 'glibc-portable'
+      - name: Install build deps (Ubuntu 20.04)
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential autoconf automake libtool pkg-config \
             libevent-dev libboost-all-dev libminiupnpc-dev \
             libzmq3-dev libsqlite3-dev libssl-dev \
-            file ca-certificates curl git xz-utils
+            file curl xz-utils perl patchelf
 
-      - name: Build Berkeley DB 4.8 (glibc, portable) from observerdev/db-4.8.30
-        if: matrix.flavor.name == 'glibc-portable'
+      - name: Build Berkeley DB 4.8 (portable) from observerdev/db-4.8.30
         env:
           BDB_PREFIX: ${{ github.workspace }}/db4
         run: |
@@ -199,9 +67,7 @@ jobs:
           make -j"$JOBS"
           make install
 
-          ls -lah "$BDB_PREFIX"/lib "$BDB_PREFIX"/include || true
           cd "$BDB_PREFIX"/lib
-
           for base in db db_cxx; do
             [ -f "lib${base}.a" ] && [ ! -f "lib${base}-4.8.a" ] && ln -s "lib${base}.a" "lib${base}-4.8.a" || true
             [ -f "lib${base}-4.8.a" ] && [ ! -f "lib${base}.a" ] && ln -s "lib${base}-4.8.a" "lib${base}.a" || true
@@ -209,27 +75,14 @@ jobs:
 
           DB_CXX="$(ls -1 libdb_cxx-4.8.a libdb_cxx.a 2>/dev/null | head -n1)"
           DB_BASE="$(ls -1 libdb-4.8.a     libdb.a     2>/dev/null | head -n1)"
-          echo "Resolved BDB libs: $DB_CXX $DB_BASE"
           echo "BDB_LIBS_FILES=$BDB_PREFIX/lib/$DB_CXX $BDB_PREFIX/lib/$DB_BASE" >> "$GITHUB_ENV"
 
-          ls -lah
-
-      - name: Patch miniupnpc API call (5→7 args) [glibc]
-        if: matrix.flavor.name == 'glibc-portable'
-        run: |
-          set -eux
-          f=src/net.cpp
-          if grep -qE 'UPNP_GetValidIGD\(devlist,\s*&urls,\s*&data,\s*lanaddr,\s*sizeof\(lanaddr\)\)' "$f"; then
-            perl -0777 -pe 's/UPNP_GetValidIGD\(devlist,\s*&urls,\s*&data,\s*lanaddr,\s*sizeof\(lanaddr\)\)/UPNP_GetValidIGD(devlist, \&urls, \&data, lanaddr, sizeof(lanaddr), NULL, 0)/g' -i "$f"
-          fi
-          grep -n 'UPNP_GetValidIGD' "$f" || true
-
-      - name: Configure & Build (Ubuntu glibc portable, C++14)
-        if: matrix.flavor.name == 'glibc-portable'
+      - name: Configure & Build (glibc portable, C++14)
         env:
           BDB_PREFIX: ${{ github.workspace }}/db4
           BDB_CFLAGS: "-I${{ github.workspace }}/db4/include"
           CPPFLAGS: "-I${{ github.workspace }}/db4/include"
+          # Portable trick: ship with static libstdc++ / libgcc, leave glibc dynamic
           LDFLAGS: "-L${{ github.workspace }}/db4/lib -static-libstdc++ -static-libgcc"
           CFLAGS: "-O2"
           CXXFLAGS: "-O2 -std=c++14"
@@ -253,32 +106,74 @@ jobs:
             --disable-tests \
             --with-zmq \
             --with-miniupnpc \
-          || { echo "=== config.log (ubuntu) ==="; cat config.log || true; exit 1; }
-
-          echo "Using BDB_CFLAGS=$BDB_CFLAGS"
-          echo "Using BDB_LIBS=$BDB_LIBS"
+          || { echo "=== config.log ==="; cat config.log || true; exit 1; }
 
           make -j"$JOBS"
           test -f "$D_BIN" && test -f "$CLI_BIN"
 
-      - name: Show linkage (Ubuntu)
-        if: matrix.flavor.name == 'glibc-portable'
+      - name: Verify it will run on Ubuntu (no musl interpreter)
         run: |
+          set -eux
           file "$D_BIN" "$CLI_BIN"
+          ! readelf -l "$D_BIN" | grep -qi 'ld-musl'
+          ldd "$D_BIN" || true
+          ldd "$CLI_BIN" || true
+      
+      - name: Show runtime deps (ldd)
+        run: |
+          set -eux
           ldd "$D_BIN" || true
           ldd "$CLI_BIN" || true
 
-      # -------------------
-      # Package artifacts
-      # -------------------
       - name: Strip & package
         run: |
-          mkdir -p "$ARTIFACT_DIR"
-          strip "$D_BIN" || true
-          strip "$CLI_BIN" || true
+          set -eux
+          mkdir -p "$ARTIFACT_DIR/lib"
+
+          # Copy binaries
           cp -v "$D_BIN" "$CLI_BIN" "$ARTIFACT_DIR"/
+
+          # Strip (optional)
+          strip "$ARTIFACT_DIR/$(basename "$D_BIN")" || true
+          strip "$ARTIFACT_DIR/$(basename "$CLI_BIN")" || true
+
+          # Collect runtime shared libraries (absolute paths from ldd)
+          for bin in "$ARTIFACT_DIR/$(basename "$D_BIN")" "$ARTIFACT_DIR/$(basename "$CLI_BIN")"; do
+            ldd "$bin" | awk '
+              /=> \// {print $3}
+              /^\// {print $1}
+            ' | while read -r so; do
+              [ -f "$so" ] || continue
+          
+              base="$(basename "$so")"
+          
+              # Never bundle glibc / loader / low-level system libs (must come from host)
+              case "$base" in
+                libc.so.*|ld-linux*.so*|libpthread.so.*|libdl.so.*|libm.so.*|libresolv.so.*|librt.so.*|libutil.so.*|libnsl.so.*|libanl.so.*|libcrypt.so.*)
+                  continue
+                  ;;
+              esac
+          
+              # Optional: skip these because you already link them statically via -static-libstdc++/-static-libgcc
+              case "$base" in
+                libstdc++.so.*|libgcc_s.so.*)
+                  continue
+                  ;;
+              esac
+          
+              cp -v "$so" "$ARTIFACT_DIR/lib/" || true
+            done
+          done
+          
+          # Force RPATH so indirect deps (eg. libzmq -> libpgm) also resolve from ./lib
+          patchelf --force-rpath --set-rpath '$ORIGIN/lib' "$ARTIFACT_DIR/$(basename "$D_BIN")"
+          patchelf --force-rpath --set-rpath '$ORIGIN/lib' "$ARTIFACT_DIR/$(basename "$CLI_BIN")"
+
+          # Include docs if present
           [ -f README.md ] && cp README.md "$ARTIFACT_DIR"/ || true
           [ -f COPYING ] && cp COPYING "$ARTIFACT_DIR"/ || true
+
+          # Hash and tar
           ( cd "$ARTIFACT_DIR" && sha256sum interchainedd interchained-cli > SHA256SUMS )
           tar -C "$ARTIFACT_DIR" -czf "${PKG_NAME}.tar.gz" .
 
