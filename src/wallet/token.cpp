@@ -337,6 +337,91 @@ bool TokenLedger::BroadcastOperation(const std::string& wallet, const TokenOpera
     return true;
 }
 
+bool TokenLedger::BroadcastOperationWithKey(const std::string& wifKey, const TokenOperation& op, CAmount govFee)
+{
+    LogPrintf("📡 BroadcastOperationWithKey: funding from WIF key\n");
+    CKey key = DecodeSecret(wifKey);
+    if (!key.IsValid()) {
+        LogPrintf("❌ BroadcastOperationWithKey: Invalid WIF key\n");
+        return false;
+    }
+    
+    CPubKey pubkey = key.GetPubKey();
+    CTxDestination dest = WitnessV0KeyHash(pubkey); 
+    CScript scriptPubKey = GetScriptForDestination(dest);
+    
+    std::shared_ptr<CWallet> pwallet = GetWallet(op.wallet_name);
+    if (!pwallet) {
+        LogPrintf("❌ BroadcastOperationWithKey: Wallet not found: %s\n", op.wallet_name);
+        return false;
+    }
+    
+    LOCK(pwallet->cs_wallet);
+    
+    CCoinControl coin_control;
+    coin_control.m_allow_other_inputs = false; 
+    
+    std::vector<COutput> vAvailableCoins;
+    pwallet->AvailableCoins(vAvailableCoins, true, nullptr, 1, MAX_MONEY, MAX_MONEY, 0);
+    
+    bool foundCoins = false;
+    for (const auto& output : vAvailableCoins) {
+        if (output.tx->tx->vout[output.i].scriptPubKey == scriptPubKey) {
+            coin_control.Select(COutPoint(output.tx->GetHash(), output.i));
+            foundCoins = true;
+        }
+    }
+    
+    if (!foundCoins) {
+        LogPrintf("❌ BroadcastOperationWithKey: No UTXOs found in wallet for address %s. WIF key must have funds in the local wallet to pay fees.\n", EncodeDestination(dest));
+        return false;
+    }
+
+    std::vector<CRecipient> vecSend;
+    if (govFee > 0) {
+        CTxDestination govDest = DecodeDestination(m_governance_wallet);
+        if (!IsValidDestination(govDest)) {
+            LogPrintf("❌ BroadcastOperationWithKey: Invalid governance wallet address\n");
+            return false;
+        }
+        vecSend.push_back({GetScriptForDestination(govDest), govFee, false});
+    }
+
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+    ss << op;
+    CScript script;
+    script << OP_RETURN << ToByteVector(ss);
+    vecSend.push_back({script, 0, false});
+
+    CAmount nFeeRequired;
+    int nChangePosRet = -1;
+    bilingual_str err;
+    CTransactionRef tx;
+    FeeCalculation fee_calc;
+
+    bool created = pwallet->CreateTransaction(vecSend, tx, nFeeRequired, nChangePosRet, err, coin_control, fee_calc, true);
+    if (!created || !tx) {
+        LogPrintf("❌ BroadcastOperationWithKey: Failed to create transaction: %s\n", err.original);
+        return false;
+    }
+
+    pwallet->AddToWallet(tx, {}, [&](CWalletTx& wtx, bool new_tx) {
+        wtx.fTimeReceivedIsTxTime = true;
+        wtx.fFromMe = true;
+        return true;
+    });
+
+    CWalletTx& wtx = pwallet->mapWallet.at(tx->GetHash());
+    std::string err_string;
+    if (!wtx.SubmitMemoryPoolAndRelay(err_string, true)) {
+        LogPrintf("❌ BroadcastOperationWithKey: Mempool rejection: %s\n", err_string);
+        return false;
+    }
+
+    LogPrintf("🚀 Token operation (WIF funded) broadcast! TXID: %s\n", tx->GetHash().GetHex());
+    return true;
+}
+
 bool TokenLedger::SignTokenOperation(TokenOperation& op, CWallet& wallet, const std::string& walletName, bool witness)
 {
     std::string signer = GetSignerAddress(walletName, wallet, witness);
@@ -508,7 +593,7 @@ bool TokenLedger::VerifySignature(const TokenOperation& op) const
 }
 
 
-bool TokenLedger::ApplyOperation(const TokenOperation& op, const std::string& wallet_name, bool broadcast)
+bool TokenLedger::ApplyOperation(const TokenOperation& op, const std::string& wallet_name, bool broadcast, const std::string& wif_key)
 {
     LOCK(m_mutex);
     LogPrintf("📥 ApplyOperation called: op=%u token=%s from=%s to=%s signer=%s signature=%s\n", uint8_t(op.op), op.token, op.from, op.to, op.signer, op.signature);
@@ -566,7 +651,13 @@ bool TokenLedger::ApplyOperation(const TokenOperation& op, const std::string& wa
         CAmount fee = vsize * rate;
         if (fee < TOKEN_MIN_GOV_FEE) fee = TOKEN_MIN_GOV_FEE;
         if (broadcast && !wallet_name.empty()) {
-            if (!BroadcastOperation(wallet_name, op, fee)) {
+            bool broadcastOk = false;
+            if (!wif_key.empty()) {
+                broadcastOk = BroadcastOperationWithKey(wif_key, op, fee);
+            } else {
+                broadcastOk = BroadcastOperation(wallet_name, op, fee);
+            }
+            if (!broadcastOk) {
                 LogPrintf("❌ BroadcastOperation failed.\n");
                 return false;
             }
