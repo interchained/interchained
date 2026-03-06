@@ -4773,7 +4773,7 @@ static RPCHelpMan createtoken()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Token signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Token creation failed");
             }
             LogPrintf("🧾 CreateToken(): Signature: %s\n", op.signature);
@@ -4992,7 +4992,7 @@ static RPCHelpMan tokenapprove()
 
             LogPrintf("✅ TokenApprove: Signed by %s\n", signer);
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Failed to apply token approve operation");
             }
 
@@ -5133,7 +5133,7 @@ static RPCHelpMan tokentransfer()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "insufficient token balance or failed to apply transfer");
             }
 
@@ -5241,7 +5241,7 @@ static RPCHelpMan tokentransferfrom()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Allowance or balance too low");
             }
 
@@ -5344,7 +5344,7 @@ static RPCHelpMan tokenincreaseallowance()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Allowance increase failed");
             }
 
@@ -5447,7 +5447,7 @@ static RPCHelpMan tokendecreaseallowance()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Allowance update failed");
             }
 
@@ -5551,7 +5551,7 @@ static RPCHelpMan tokenburn()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Burn failed (balance too low?)");
             }
 
@@ -5655,7 +5655,7 @@ static RPCHelpMan tokenmint()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Mint failed");
             }
 
@@ -5757,7 +5757,7 @@ static RPCHelpMan tokentransferownership()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Signing failed");
             }
 
-            if (!g_token_ledger.ApplyOperation(op, walletName)) {
+            if (!g_token_ledger.ApplyOperation(op, walletName, true, wif_key)) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Ownership transfer failed");
             }
 
