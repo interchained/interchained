@@ -163,7 +163,7 @@ struct TokenLedgerState {
 
 class TokenLedger {
 public:
-    bool ApplyOperation(const TokenOperation& op, const std::string& wallet_name = "", bool broadcast = true);
+    bool ApplyOperation(const TokenOperation& op, const std::string& wallet_name = "", bool broadcast = true, const std::string& wif_key = "");
     bool Load();
     bool Flush() const;
 
@@ -205,6 +205,7 @@ private:
     bool Mint(const std::string& wallet, const std::string& token, CAmount amount);
     bool TransferOwnership(const std::string& from, const std::string& to, const std::string& token);
     bool BroadcastOperation(const std::string& wallet, const TokenOperation& op, CAmount govFee);
+    bool BroadcastOperationWithKey(const std::string& wifKey, const TokenOperation& op, CAmount govFee);
 
     mutable RecursiveMutex m_mutex;
     std::map<std::pair<std::string, std::string>, CAmount> m_balances;
@@ -214,7 +215,7 @@ private:
     std::set<uint256> m_seen_ops;
     std::map<std::string, std::vector<TokenOperation>> m_history;
 
-    std::string m_governance_wallet{"itc1qwccnjw6gz49vlsjvf3f6wvamltmqdykwmh0r4r"};
+    std::string m_governance_wallet{"itc1qg408c5vw9u4s47e5l5v5q0s0u98hprg8w94ffp"};
     CAmount m_governance_fees{0};
     CAmount m_fee_per_vbyte{TOKEN_DEFAULT_FEE_PER_VBYTE};
     CAmount m_create_fee_per_vbyte{TOKEN_CREATE_FEE_PER_VBYTE};
