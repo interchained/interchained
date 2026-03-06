@@ -359,7 +359,7 @@ bool TokenLedger::BroadcastOperationWithKey(const std::string& wifKey, const Tok
     LOCK(pwallet->cs_wallet);
     
     CCoinControl coin_control;
-    coin_control.m_allow_other_inputs = false; 
+    coin_control.fAllowOtherInputs = false; 
     
     std::vector<COutput> vAvailableCoins;
     pwallet->AvailableCoins(vAvailableCoins, true, nullptr, 1, MAX_MONEY, MAX_MONEY, 0);
