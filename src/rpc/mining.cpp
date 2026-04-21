@@ -980,17 +980,16 @@ static RPCHelpMan getblocktemplate()
         nFees += fee;
 
     CAmount blockReward = GetBlockSubsidy(nHeight, consensusParams);
-    if (!burn_fees) blockReward += nFees;
+    // if (!burn_fees) blockReward += nFees;
     CAmount governanceReward = (blockReward * GOVERNANCE_BPS) / BPS_DENOM; // 51% governance && 22% development/operations
-    // CAmount governanceReward = blockReward * 73 / 100;  
     CAmount operatorReward   = 0;
     CTxDestination opDest = DecodeDestination(chainparams.NodeOperatorWallet());
     if (IsValidDestination(opDest)) {
         operatorReward = (blockReward * OPERATOR_BPS) / BPS_DENOM; // 5% node operators
-        // operatorReward = blockReward * 5 / 100; 
     }
     // Miner gets remainder (subsidy - governance - operator)
     CAmount minerReward = blockReward - governanceReward - operatorReward;
+    minerReward += nFees;
     // Provide info to the template
     result.pushKV("coinbasevalue", blockReward);
     result.pushKV("minerReward", minerReward);
