@@ -2250,7 +2250,7 @@ bool CChainState::ConnectBlock(const CBlock& block, BlockValidationState& state,
     CAmount blockReward = GetBlockSubsidy(pindex->nHeight, chainparams.GetConsensus());
     CAmount blockRewardPlusFees = blockReward + nFees;
     if (block.vtx[0]->GetValueOut() > blockRewardPlusFees) {
-        LogPrintf("ERROR: ConnectBlock(): coinbase pays too much (actual=%d vs limit=%d)\n", block.vtx[0]->GetValueOut(), blockReward);
+        LogPrintf("ERROR: ConnectBlock(): coinbase pays too much (actual=%d vs limit=%d)\n", block.vtx[0]->GetValueOut(), blockRewardPlusFees);
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount");
     }
     
