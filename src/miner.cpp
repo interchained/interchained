@@ -385,7 +385,6 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     static constexpr int OP_BPS  =  500; // 5.00%
     static constexpr int BPS_DENOM = 10000;
     CAmount blockReward = GetBlockSubsidy(nHeight, chainparams.GetConsensus());
-    if (!burn_fees) blockReward += nFees;
     // Governance + dev/ops
     CAmount governanceReward = (blockReward * GOV_BPS) / BPS_DENOM; // 51% goes to governance & 22% development/operations
     // CAmount governanceReward = blockReward * 73 / 100; 
@@ -393,6 +392,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
     bool hasOpDest = IsValidDestination(opDest);
     CAmount operatorReward = hasOpDest ? (blockReward * OP_BPS) / BPS_DENOM : 0; // 5% goes to node operator 
     // CAmount operatorReward = hasOpDest ? blockReward * 5 / 100 : 0; 
+    if (!burn_fees) blockReward += nFees;
     coinbaseTx.vout.resize(hasOpDest ? 3 : 2);
     coinbaseTx.vout[0].scriptPubKey = scriptPubKeyIn;
     coinbaseTx.vout[0].nValue = blockReward - governanceReward - operatorReward;
