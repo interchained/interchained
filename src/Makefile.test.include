@@ -253,6 +253,7 @@ BITCOIN_TESTS =\
   test/policy_fee_tests.cpp \
   test/policyestimator_tests.cpp \
   test/pow_tests.cpp \
+  test/dual_pow_tests.cpp \
   test/prevector_tests.cpp \
   test/raii_event_tests.cpp \
   test/random_tests.cpp \

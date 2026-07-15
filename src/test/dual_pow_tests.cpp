@@ -8,7 +8,7 @@
 //
 //   1. Pre-fork heights still route to Yespower.
 //   2. Post-fork heights accept any header whose SHA256 hash satisfies
-//      the (capped) SHA256 target.
+//      the encoded target.
 //   3. Post-fork heights REJECT a header that fails SHA256 when the
 //      time-gap to the previous block is below nPowEmergencyTimeout
 //      (Yespower fallback NOT armed).
@@ -16,12 +16,13 @@
 //      time-gap exceeds nPowEmergencyTimeout, and the result is
 //      independent of the pre-computed `hash` argument (the fallback
 //      re-hashes the raw header itself).
-//   5. CheckYespower is self-contained and ignores any pre-computed hash.
+//   5. An unknown previous timestamp arms the fallback during unordered
+//      block-index loading.
 //
 // To keep tests deterministic and fast, we mutate a local copy of the
-// mainnet Consensus::Params: we lower sha256ReactivationHeight and we
-// raise powLimitYespower to ~2^255 so the fallback always succeeds when
-// reached. The dispatch logic is what's under test, not yespower itself.
+// mainnet Consensus::Params: we lower sha256ReactivationHeight, disable the
+// grace window, and raise powLimitYespower to ~2^255. Fallback-path tests
+// search a few nonces for a header below that easy Yespower target.
 
 #include <chain.h>
 #include <chainparams.h>
@@ -41,15 +42,16 @@ namespace {
 // Build a Consensus::Params suitable for dispatch testing:
 //   - sha256ReactivationHeight lowered to 1000 so we can pick heights freely.
 //   - nPowEmergencyTimeout = 120 (matches mainnet).
-//   - powLimitYespower raised to ~2^255 so any header passes the Yespower
-//     fallback path (we are testing dispatch, not yespower correctness).
+//   - grace disabled so the emergency tests isolate timeout dispatch.
+//   - powLimitYespower raised to ~2^255 for cheap Yespower test headers.
 //   - powLimit (SHA256) left at mainnet value.
 Consensus::Params MakeTestConsensus(const ArgsManager& args)
 {
     auto p = CreateChainParams(args, CBaseChainParams::MAIN)->GetConsensus();
     p.sha256ReactivationHeight = 1000;
     p.nPowEmergencyTimeout     = 120;
-    // 2^255 - 1: effectively "any hash" for the Yespower fallback path.
+    p.nPowYespowerGraceBlocks  = 0;
+    // 2^255 - 1: approximately two hashes per valid test header.
     p.powLimitYespower = uint256S(
         "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     return p;
@@ -60,6 +62,11 @@ Consensus::Params MakeTestConsensus(const ArgsManager& args)
 unsigned int EasySha256Bits(const Consensus::Params& p)
 {
     return UintToArith256(p.powLimit).GetCompact();
+}
+
+unsigned int EasyYespowerBits(const Consensus::Params& p)
+{
+    return UintToArith256(p.powLimitYespower).GetCompact();
 }
 
 // Construct a dummy header. nTime is supplied by the caller because the
@@ -73,6 +80,19 @@ CBlockHeader MakeHeader(unsigned int nBits, uint32_t nTime)
     h.nTime          = nTime;
     h.nBits          = nBits;
     h.nNonce         = 0;
+    return h;
+}
+
+// Find a header satisfying the fixture's easy Yespower target. This keeps
+// fallback acceptance deterministic without weakening production logic.
+CBlockHeader MakeYespowerHeader(const Consensus::Params& p, int height, uint32_t nTime)
+{
+    CBlockHeader h = MakeHeader(EasyYespowerBits(p), nTime);
+    arith_uint256 target;
+    target.SetCompact(h.nBits);
+    while (UintToArith256(h.YespowerHash(height)) > target) {
+        ++h.nNonce;
+    }
     return h;
 }
 
@@ -181,8 +201,8 @@ BOOST_AUTO_TEST_CASE(postfork_emergency_boundary_strict_inequality)
 BOOST_AUTO_TEST_CASE(postfork_emergency_armed_reaches_yespower_fallback)
 {
     const auto consensus = MakeTestConsensus(*m_node.args);
-    const unsigned int nBits = EasySha256Bits(consensus);
-    CBlockHeader hdr = MakeHeader(nBits, /*nTime=*/4'000'000);
+    CBlockHeader hdr = MakeYespowerHeader(consensus, /*height=*/2000,
+                                          /*nTime=*/4'000'000);
 
     // A SHA256-failing hash — the only way this test can pass is if
     // the Yespower fallback is reached.
@@ -191,7 +211,7 @@ BOOST_AUTO_TEST_CASE(postfork_emergency_armed_reaches_yespower_fallback)
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
     // Gap = 3600s, far above 120s threshold → fallback armed.
-    BOOST_CHECK(CheckProofOfWork(fail_sha256, hdr, nBits, consensus,
+    BOOST_CHECK(CheckProofOfWork(fail_sha256, hdr, hdr.nBits, consensus,
                                  /*nHeight=*/2000,
                                  /*prevBlockTime=*/4'000'000 - 3600));
 }
@@ -207,8 +227,8 @@ BOOST_AUTO_TEST_CASE(postfork_emergency_armed_reaches_yespower_fallback)
 BOOST_AUTO_TEST_CASE(postfork_fallback_ignores_precomputed_hash)
 {
     const auto consensus = MakeTestConsensus(*m_node.args);
-    const unsigned int nBits = EasySha256Bits(consensus);
-    CBlockHeader hdr = MakeHeader(nBits, /*nTime=*/5'000'000);
+    CBlockHeader hdr = MakeYespowerHeader(consensus, /*height=*/2000,
+                                          /*nTime=*/5'000'000);
 
     uint256 easy;
     easy.SetHex("0000000000000000000000000000000000000000000000000000000000000001");
@@ -217,41 +237,42 @@ BOOST_AUTO_TEST_CASE(postfork_fallback_ignores_precomputed_hash)
 
     const int64_t prev = 5'000'000 - 3600; // gap > 120s → fallback armed
 
-    const bool r_easy = CheckProofOfWork(easy, hdr, nBits, consensus,
+    const bool r_easy = CheckProofOfWork(easy, hdr, hdr.nBits, consensus,
                                          /*nHeight=*/2000, prev);
-    const bool r_hard = CheckProofOfWork(hard, hdr, nBits, consensus,
+    const bool r_hard = CheckProofOfWork(hard, hdr, hdr.nBits, consensus,
                                          /*nHeight=*/2000, prev);
 
     // Easy hash trivially passes SHA256 (returns true without entering
-    // fallback). Hard hash forces the fallback path. With the inflated
-    // powLimitYespower in MakeTestConsensus(), the fallback also returns
-    // true — proving the fallback was actually reached and didn't depend
-    // on the SHA256-failing `hash` argument.
+    // fallback). Hard hash forces the fallback path. The header was solved
+    // against the fixture's easy Yespower target, so both return true and
+    // prove fallback does not depend on the precomputed SHA256 hash.
     BOOST_CHECK(r_easy);
     BOOST_CHECK(r_hard);
 }
 
 
 // ---------------------------------------------------------------------------
-// prevBlockTime == -1 (sentinel) is permissive: emergency is NOT armed
-// by a missing previous-time signal. Used during reindex / disk reload
-// where pindexPrev is not available at the call site.
+// prevBlockTime == -1 (sentinel) is permissive: emergency IS armed when
+// the previous timestamp is unavailable during unordered block-index load.
+// This lets an already-validated historical Yespower fallback block be
+// reloaded from disk instead of being rejected solely due to load order.
 // ---------------------------------------------------------------------------
-BOOST_AUTO_TEST_CASE(postfork_sentinel_prev_time_does_not_arm_emergency)
+BOOST_AUTO_TEST_CASE(postfork_sentinel_prev_time_arms_emergency)
 {
     const auto consensus = MakeTestConsensus(*m_node.args);
-    const unsigned int nBits = EasySha256Bits(consensus);
-    CBlockHeader hdr = MakeHeader(nBits, /*nTime=*/6'000'000);
+    CBlockHeader hdr = MakeYespowerHeader(consensus, /*height=*/2000,
+                                          /*nTime=*/6'000'000);
 
     uint256 fail_sha256;
     fail_sha256.SetHex(
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
 
-    // With prevBlockTime == -1 the emergency check must NOT arm; the
-    // SHA256-failing hash must therefore be rejected.
-    BOOST_CHECK(!CheckProofOfWork(fail_sha256, hdr, nBits, consensus,
-                                  /*nHeight=*/2000,
-                                  /*prevBlockTime=*/-1));
+    // With prevBlockTime == -1 the emergency check must arm. The failing
+    // SHA256 hash therefore reaches the deterministic Yespower fallback,
+    // which succeeds under this fixture's permissive Yespower target.
+    BOOST_CHECK(CheckProofOfWork(fail_sha256, hdr, hdr.nBits, consensus,
+                                 /*nHeight=*/2000,
+                                 /*prevBlockTime=*/-1));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

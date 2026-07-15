@@ -414,7 +414,7 @@ bool CheckProofOfWorkWithHeight(uint256 hash, CBlockHeader block, unsigned int n
     bool fOverflow;
     arith_uint256 bnTarget;
 
-    LogPrintf("💡 CheckProofOfWorkWithHeight: nHeight=%d prevBlockTime=%d\n", nHeight, (int)prevBlockTime);
+    LogPrintf("💡 CheckProofOfWorkWithHeight: nHeight=%d prevBlockTime=%lld\n", nHeight, (long long)prevBlockTime);
     bnTarget.SetCompact(nBits, &fNegative, &fOverflow);
 
     if (nHeight == 0 || hash == params.hashGenesisBlock) {

@@ -299,9 +299,15 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
                 // (nTime == 0) the same as a missing prev: pass -1 sentinel
                 // for permissive emergency-arming, matching every other call
                 // site that lacks a real previous-block timestamp.
-                int64_t prevBlockTime = (pindexNew->pprev && pindexNew->pprev->nTime != 0)
-                                          ? pindexNew->pprev->nTime
-                                          : -1;
+                // Assign the sentinel separately. A conditional expression
+                // mixing uint32_t nTime with -1 promotes -1 to UINT32_MAX
+                // before it is widened to int64_t. That makes an unknown
+                // parent time look like 4294967295 and prevents historical
+                // emergency-Yespower blocks from loading.
+                int64_t prevBlockTime = -1;
+                if (pindexNew->pprev && pindexNew->pprev->nTime != 0) {
+                    prevBlockTime = static_cast<int64_t>(pindexNew->pprev->nTime);
+                }
                 if (!CheckProofOfWork(powHash, dummyHeader, pindexNew->nBits, consensusParams, pindexNew->nHeight, prevBlockTime)) {
                     return error("%s: CheckProofOfWork failed: %s", __func__, pindexNew->ToString());
                 }
