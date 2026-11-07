@@ -2,8 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chainparams.h>
 #include <index/disktxpos.h>
 #include <index/txindex.h>
+#include <pow.h>
 #include <node/ui_interface.h>
 #include <shutdown.h>
 #include <util/system.h>
@@ -240,8 +242,37 @@ bool TxIndex::FindTx(const uint256& tx_hash, uint256& block_hash, CTransactionRe
         return error("%s: OpenBlockFile failed", __func__);
     }
     CBlockHeader header;
+    int nHeight = -1;
     try {
-        file >> header;
+        // The header's Ethash extras exist only for post-fork Ethash
+        // blocks, but the header does not carry its own height, and a
+        // tag-only read (file >> header) consumes 40 phantom bytes on
+        // pre-fork blocks whose nVersion collides with the Ethash tag,
+        // landing the tx read in the wrong place (txid mismatch /
+        // CompactSize errors in the log). Read the fixed fields first,
+        // recover the height from the parent entry in the block index,
+        // then step over the extras exactly when they are really there.
+        const int triPowForkHeight = Params().GetConsensus().triPowForkHeight;
+        header.UnserializeWithHeight(file, 0, triPowForkHeight);
+        {
+            LOCK(cs_main);
+            if (header.hashPrevBlock.IsNull()) {
+                nHeight = 0;
+            } else if (const CBlockIndex* pindexPrev = LookupBlockIndex(header.hashPrevBlock)) {
+                nHeight = pindexPrev->nHeight + 1;
+            }
+        }
+        if (nHeight >= 0 && TriPowHeaderExtrasApply(header.nVersion, nHeight, triPowForkHeight)) {
+            file >> header.nNonce64;
+            file >> header.mixHash;
+        } else if (nHeight < 0) {
+            // Parent not in the index (not expected for an indexed tx):
+            // fall back to the tag-only read from the block start.
+            if (fseek(file.Get(), postx.nPos, SEEK_SET)) {
+                return error("%s: fseek(...) failed", __func__);
+            }
+            file >> header;
+        }
         if (fseek(file.Get(), postx.nTxOffset, SEEK_CUR)) {
             return error("%s: fseek(...) failed", __func__);
         }
@@ -252,6 +283,7 @@ bool TxIndex::FindTx(const uint256& tx_hash, uint256& block_hash, CTransactionRe
     if (tx->GetHash() != tx_hash) {
         return error("%s: txid mismatch", __func__);
     }
-    block_hash = header.GetHash();
+    block_hash = nHeight >= 0 ? header.GetHashAtHeight(nHeight, Params().GetConsensus().triPowForkHeight)
+                              : header.GetHash();
     return true;
 }
