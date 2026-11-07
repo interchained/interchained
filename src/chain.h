@@ -7,6 +7,7 @@
 #define BITCOIN_CHAIN_H
 
 #include <arith_uint256.h>
+#include <chainparams.h> // Params(): triPowForkHeight for the disk-index extras gate
 #include <consensus/params.h>
 #include <flatfile.h>
 #include <pow.h>
@@ -360,10 +361,14 @@ public:
         READWRITE(obj.nTime);
         READWRITE(obj.nBits);
         READWRITE(obj.nNonce);
-        // Tri-PoW: Ethash-tagged entries also persist the Ethash header
-        // extras, gated on the nVersion tag exactly like CBlockHeader
-        // serialization, so pre-tri-PoW index entries are byte-identical.
-        if (PowAlgoTagFromVersion(obj.nVersion) == static_cast<int>(PowAlgo::ETHASH)) {
+        // Tri-PoW: Ethash entries also persist the Ethash header extras.
+        // The gate is height-aware (TriPowHeaderExtrasApply), NOT the raw
+        // nVersion tag alone: pre-fork miners used bits 13-14 freely, so
+        // legacy records exist whose version bits decode as ETHASH even
+        // though no extras were ever written for them. Reading extras for
+        // such a record overruns the value buffer and the block index
+        // fails to load ("LoadBlockIndexGuts: failed to read value").
+        if (TriPowHeaderExtrasApply(obj.nVersion, obj.nHeight, Params().GetConsensus().triPowForkHeight)) {
             READWRITE(obj.nNonce64);
             READWRITE(obj.mixHash);
         }
@@ -380,7 +385,10 @@ public:
         block.nNonce          = nNonce;
         block.nNonce64        = nNonce64;
         block.mixHash         = mixHash;
-        return block.GetHash();
+        // Height-aware hash: pre-fork entries whose version bits collide
+        // with the Ethash tag must still hash to their historical
+        // 80-byte-header hash (see TriPowHeaderExtrasApply).
+        return block.GetHashAtHeight(nHeight, Params().GetConsensus().triPowForkHeight);
     }
 
 

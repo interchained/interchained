@@ -74,16 +74,19 @@ public:
     }
 
     template <typename Stream>
-    void SerializeForHash(Stream& s, int height) const {
+    void SerializeForHash(Stream& s, int height, int triPowForkHeight) const {
         s << nVersion;
         s << hashPrevBlock;
         s << hashMerkleRoot;
         s << nTime;
         s << nBits;
         s << nNonce;
-        // Keep the hash serialization identical to SerializationOp:
-        // Ethash-tagged headers append nNonce64 then mixHash.
-        if (PowAlgoTagFromVersion(nVersion) == static_cast<int>(PowAlgo::ETHASH)) {
+        // The Ethash extras are part of the hashed form only for blocks
+        // that actually carry them (at/after the tri-PoW fork with the
+        // Ethash tag; see TriPowHeaderExtrasApply). A pre-fork header
+        // whose version bits happen to decode as ETHASH hashes over the
+        // legacy 80 bytes, exactly as it did historically.
+        if (TriPowHeaderExtrasApply(nVersion, height, triPowForkHeight)) {
             s << nNonce64;
             s << mixHash;
         }
@@ -107,6 +110,10 @@ public:
     }
 
     uint256 GetHash() const;
+
+    /** Hash of this header as a block at the given height (height-aware
+     *  Ethash-extras gating; see SerializeForHash). */
+    uint256 GetHashAtHeight(int height, int triPowForkHeight) const;
 
     uint256 YespowerHash(int height) const;
 
