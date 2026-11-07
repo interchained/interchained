@@ -44,6 +44,13 @@ uint256 CBlockHeader::GetHash() const
     return SerializeHash(*this);
 }
 
+uint256 CBlockHeader::GetHashAtHeight(int height, int triPowForkHeight) const
+{
+    CHashWriter ss(SER_GETHASH, PROTOCOL_VERSION);
+    SerializeForHash(ss, height, triPowForkHeight);
+    return ss.GetHash();
+}
+
 PowAlgo GetBlockPowAlgo(const CBlockHeader& block, int nHeight, const Consensus::Params& params)
 {
     if (nHeight >= params.triPowForkHeight) {

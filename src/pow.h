@@ -56,6 +56,26 @@ inline int PowAlgoTagFromVersion(int32_t nVersion)
 }
 
 /**
+ * Whether a header at nHeight actually carries the Ethash extra fields
+ * (nNonce64 + mixHash) in serialized form.
+ *
+ * The tag bits alone are NOT sufficient evidence: bits 13-14 were used
+ * by ordinary miners long before tri-PoW (e.g. mainnet block 900000 has
+ * nVersion 0x20004000, whose raw tag decodes as ETHASH), so pre-fork
+ * headers and block-index records must never be (de)serialized with the
+ * extras even when their version bits collide with the Ethash tag.
+ * Only blocks at/after the tri-PoW fork height with the Ethash tag
+ * carry the extras. The fork height is passed in explicitly (rather
+ * than read from Params()) so this stays a pure header-inline usable
+ * from the consensus library, which must not depend on chainparams.
+ */
+inline bool TriPowHeaderExtrasApply(int32_t nVersion, int nHeight, int triPowForkHeight)
+{
+    return nHeight >= triPowForkHeight &&
+           PowAlgoTagFromVersion(nVersion) == static_cast<int>(PowAlgo::ETHASH);
+}
+
+/**
  * Which PoW algorithm a block uses.
  * At/after params.triPowForkHeight the nVersion tag bits decide
  * (untagged/0 -> SHA256). Before the fork, the era mapping applies:
