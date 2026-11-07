@@ -7,6 +7,7 @@
 #include <arith_uint256.h>
 #include <chain.h>
 #include "pow/yespower.h"
+#include "pow/ethash.h"
 #include "validation.h"      // for cs_main
 #include "logging.h"         // for BCLog and LogPrint
 #include <primitives/block.h>
@@ -40,6 +41,20 @@ static inline uint256 GetPowLimitForHeight(int nHeight, const Consensus::Params&
     if (nHeight >= params.yespowerForkHeight) return params.powLimitYespower;
     return params.powLimit;
 }
+
+// Tri-PoW (post-triPowForkHeight): each algo retargets against its OWN
+// powLimit and its OWN ancestor window (see DarkGravityWave3NovaTriPow).
+static inline uint256 GetPowLimitForAlgo(PowAlgo algo, const Consensus::Params& params)
+{
+    switch (algo) {
+    case PowAlgo::YESPOWER: return params.powLimitYespower;
+    case PowAlgo::ETHASH:   return params.powLimitEthash;
+    case PowAlgo::SHA256:   break;
+    }
+    return params.powLimit;
+}
+
+static unsigned int DarkGravityWave3NovaTriPow(const CBlockIndex* pindexLast, const CBlockHeader* pblock, const Consensus::Params& params);
 
 // Emergency / stall trigger (TIME-BASED).
 //
@@ -75,6 +90,13 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
 {
     assert(pindexLast != nullptr);
     const int nextHeight = pindexLast->nHeight + 1;
+
+    // Tri-PoW path: per-algo retarget. Everything below is the EXACT
+    // legacy path and is followed unchanged for pre-fork heights.
+    if (nextHeight >= params.triPowForkHeight) {
+        return DarkGravityWave3NovaTriPow(pindexLast, pblock, params);
+    }
+
     LogPrintf("GetNextWorkRequired: height=%d using %s\n", pindexLast->nHeight,
           IsPostSha256Fork(nextHeight, params) ? "SHA256 target (post-fork)"
                                                : (nextHeight >= params.yespowerForkHeight ? "Yespower target" : "SHA256 target"));
@@ -265,6 +287,173 @@ unsigned int DarkGravityWave3Nova(const CBlockIndex* pindexLast, const Consensus
     return newDifficulty.GetCompact();
 }
 
+// Tri-PoW retarget (post-triPowForkHeight only) -------------------------------
+// Same DGW3-NOVA math as DarkGravityWave3Nova, but every input comes from
+// the candidate algo's own sub-chain:
+//   * Window: walk back from pindexLast collecting ancestors whose
+//     GetBlockPowAlgo() == candidate algo, up to nPastBlocks (the window
+//     size DarkGravityWave3Nova uses at this height). The walk does NOT
+//     stop at triPowForkHeight: pre-fork ancestors are era-classified by
+//     GetBlockPowAlgo, which is the intended history seeding across the
+//     fork (SHA256/YESPOWER inherit their era windows this way).
+//   * Target spacing: params.nPowTargetSpacing * 3 — with three algos
+//     sharing the chain, each algo is expected to find one block per
+//     three chain blocks.
+//   * Bootstrap: ETHASH has no pre-fork ancestors (and any algo may have
+//     a short window just after the fork). Slots beyond the collected
+//     same-algo blocks are seeded at the algo's powLimit, each spaced
+//     exactly one (tripled) target spacing older than the previous slot,
+//     so padded slots are difficulty- and timespan-neutral.
+//   * Clamp: the result is clamped at the candidate algo's own powLimit
+//     (SHA256 -> powLimit, YESPOWER -> powLimitYespower, ETHASH ->
+//     powLimitEthash). The legacy post-reactivation Yespower cap does
+//     NOT apply on this path.
+// The window is materialised newest-first as (nBits, nTime) pairs; the
+// core loop, rolling-median, smoothing and decay steps below are the
+// DarkGravityWave3Nova steps re-expressed over that vector (consecutive
+// vector entries replace pindex/pprev pairs).
+static std::vector<std::pair<unsigned int, int64_t>> CollectSameAlgoWindow(
+    const CBlockIndex* pindexLast, PowAlgo algo,
+    const Consensus::Params& params, int nPastBlocks)
+{
+    std::vector<std::pair<unsigned int, int64_t>> window;
+    for (const CBlockIndex* pindex = pindexLast; pindex && (int)window.size() < nPastBlocks; pindex = pindex->pprev) {
+        CBlockHeader ancestor = pindex->GetBlockHeader();
+        if (GetBlockPowAlgo(ancestor, pindex->nHeight, params) == algo) {
+            window.emplace_back(pindex->nBits, pindex->GetBlockTime());
+        }
+    }
+    if ((int)window.size() < nPastBlocks) {
+        const int64_t spacing = params.nPowTargetSpacing * 3;
+        const unsigned int limitBits = UintToArith256(GetPowLimitForAlgo(algo, params)).GetCompact();
+        int64_t nextTime = window.empty() ? pindexLast->GetBlockTime()
+                                          : window.back().second - spacing;
+        while ((int)window.size() < nPastBlocks) {
+            window.emplace_back(limitBits, nextTime);
+            nextTime -= spacing;
+        }
+    }
+    return window;
+}
+
+static unsigned int DarkGravityWave3NovaTriPow(const CBlockIndex* pindexLast, const CBlockHeader* pblock, const Consensus::Params& params)
+{
+    assert(pindexLast != nullptr);
+    assert(pblock != nullptr);
+    const int nextHeight = pindexLast->nHeight + 1;
+    const int nPastBlocks = (nextHeight >= params.nextDifficultyFork5Height) ? 12 : 24;
+    const int64_t targetSpacing = params.nPowTargetSpacing * 3;
+    const bool v9 = nextHeight >= params.nextDifficultyFork5Height;
+
+    const PowAlgo algo = GetBlockPowAlgo(*pblock, nextHeight, params);
+    const arith_uint256 limit = UintToArith256(GetPowLimitForAlgo(algo, params));
+    LogPrintf("💡 DGW3-NOVA-TRIPOW: height=%d algo=%d powLimit=%s\n", nextHeight, (int)algo, limit.ToString());
+
+    if (nextHeight < nPastBlocks)
+        return limit.GetCompact();
+
+    const std::vector<std::pair<unsigned int, int64_t>> window =
+        CollectSameAlgoWindow(pindexLast, algo, params, nPastBlocks);
+
+    // Core loop: identical averaging/timespan accumulation to
+    // DarkGravityWave3Nova, consuming the same-algo window.
+    arith_uint256 pastDifficultyAverage, pastDifficultyAveragePrev;
+    int64_t actualTimespan = 0, lastBlockTime = 0;
+    for (int i = 0; i < nPastBlocks; ++i) {
+        arith_uint256 currentDifficulty = arith_uint256().SetCompact(window[i].first);
+        if (i == 0)
+            pastDifficultyAverage = currentDifficulty;
+        else
+            pastDifficultyAverage = ((pastDifficultyAveragePrev * i) + currentDifficulty) / (i + 1);
+        pastDifficultyAveragePrev = pastDifficultyAverage;
+        if (lastBlockTime > 0)
+            actualTimespan += lastBlockTime - window[i].second;
+        lastBlockTime = window[i].second;
+    }
+
+    const int64_t targetTimespan = nPastBlocks * targetSpacing;
+    int64_t minTimespanClamp = (targetTimespan / 3);
+    int64_t maxTimespanClamp = (targetTimespan * 3);
+    int64_t emergencyClamp = v9 ? (targetTimespan / 3) : (targetTimespan / 6);
+    int64_t minSolveClamp = v9 ? (targetTimespan / 4) : (targetTimespan / 8);
+    const int64_t minSolveTime = 12;
+
+    // Same-algo solve time: gap between the two newest same-algo blocks
+    // (bootstrap padding makes this exactly targetSpacing when the real
+    // window has fewer than two entries, so no spurious trigger).
+    int64_t actualSolveTime = window[0].second - window[1].second;
+    int64_t unclampedActualTimespan = actualTimespan;
+
+    int64_t rollingSolveTime = actualSolveTime;
+    if (v9) {
+        std::vector<int64_t> solveTimes;
+        for (int i = 0; i < std::min(nPastBlocks, 9) && i + 1 < (int)window.size(); ++i)
+            solveTimes.push_back(window[i].second - window[i + 1].second);
+        std::sort(solveTimes.begin(), solveTimes.end());
+        rollingSolveTime = solveTimes[solveTimes.size() / 2];
+        LogPrintf("🌀 DGW3-NOVA-TRIPOW Rolling median solve time = %ds\n", rollingSolveTime);
+    }
+    (void)rollingSolveTime; // as in DarkGravityWave3Nova: computed/logged, feeds no term
+
+    bool triggered = v9 ? (actualSolveTime < 2 * minSolveTime && unclampedActualTimespan < targetTimespan / 6)
+                        : (actualSolveTime < minSolveTime || unclampedActualTimespan < targetTimespan / 6);
+    if (triggered && nextHeight >= params.nextDifficultyFork3Height) {
+        LogPrintf("🚨 [DGW3%s] Emergency/min solve triggered. Solve=%ds Timespan=%ds\n",
+                  v9 ? "-NOVA-TRIPOW" : "-TRIPOW", actualSolveTime, unclampedActualTimespan);
+        actualTimespan = std::min(actualTimespan, std::min(emergencyClamp, minSolveClamp));
+    }
+
+    if (v9) {
+        if (!triggered) {
+            if (actualTimespan < minTimespanClamp) actualTimespan = minTimespanClamp;
+            if (actualTimespan > maxTimespanClamp) actualTimespan = maxTimespanClamp;
+        } else {
+            LogPrintf("🛡️ DGW3-NOVA-TRIPOW Emergency trigger at height %d: skipping normal clamps\n", nextHeight);
+        }
+    } else {
+        if (actualTimespan < minTimespanClamp) actualTimespan = minTimespanClamp;
+        if (actualTimespan > maxTimespanClamp) actualTimespan = maxTimespanClamp;
+    }
+
+    double decayFactor = 1.0;
+    if (nextHeight >= v9 && actualSolveTime > targetSpacing) {
+        double multiplier = std::min(6.0, double(actualSolveTime) / targetSpacing);
+        double decayExponent = 0.45;
+        double decayLimit = 2.0;
+        decayFactor = std::pow(multiplier, decayExponent);
+        decayFactor = std::min(decayFactor, decayLimit);
+        LogPrintf("📉 DGW3-NOVA-TRIPOW graceful decay (v9) applied: factor=%.2f (solve=%ds)\n", decayFactor, actualSolveTime);
+    }
+
+    arith_uint256 difficultySmoothing = pastDifficultyAverage;
+    if (v9) {
+        std::vector<arith_uint256> pastDiffs;
+        for (int i = 0; i < std::min(nPastBlocks, 5); ++i) {
+            arith_uint256 prevDiff;
+            prevDiff.SetCompact(window[i].first);
+            pastDiffs.push_back(prevDiff);
+        }
+        std::sort(pastDiffs.begin(), pastDiffs.end());
+        difficultySmoothing = pastDiffs[pastDiffs.size() / 2];
+        LogPrintf("📊 DGW3-NOVA-TRIPOW Difficulty median smoothing active\n");
+    }
+
+    arith_uint256 baseline = difficultySmoothing * actualTimespan / targetTimespan;
+    arith_uint256 newDifficulty = baseline;
+    if (nextHeight >= v9 && decayFactor > 1.0) {
+        arith_uint256 diffToPrevious = baseline > difficultySmoothing ? (baseline - difficultySmoothing) : 0;
+        newDifficulty = baseline - (diffToPrevious / decayFactor);
+        LogPrintf("🪂 DGW3-NOVA-TRIPOW decay-from-baseline: newDifficulty=%.8f\n", newDifficulty.getdouble());
+    }
+
+    // Per-algo clamp (replaces the legacy post-reactivation Yespower cap
+    // on this path only).
+    if (newDifficulty > limit) newDifficulty = limit;
+
+    LogPrintf("⛏️ Retargeting at height=%d with DGW3-NOVA-TRIPOW (algo=%d)\n", pindexLast->nHeight, (int)algo);
+    return newDifficulty.GetCompact();
+}
+
 unsigned int DarkGravityWave3(const CBlockIndex* pindexLast, const Consensus::Params& params)
 {
     assert(pindexLast != nullptr);
@@ -428,6 +617,46 @@ bool CheckProofOfWorkWithHeight(uint256 hash, CBlockHeader block, unsigned int n
     }
 
     // -----------------------------------------------------------------------
+    // TRI-POW (height >= triPowForkHeight): per-block tagged algorithm.
+    //
+    // The block's own tag (GetBlockPowAlgo) selects exactly ONE algorithm
+    // and exactly ONE powLimit. There is NO fallthrough between algorithms:
+    // a block validates only under its tagged algorithm, against the
+    // target encoded in its own nBits (bnTarget, already checked above
+    // for negative / overflow / zero, as before). Yespower is ALWAYS
+    // allowed post-fork here — no grace-window or emergency gating.
+    // -----------------------------------------------------------------------
+    if (nHeight >= params.triPowForkHeight) {
+        const PowAlgo algo = GetBlockPowAlgo(block, nHeight, params);
+
+        uint256 algoLimit;
+        switch (algo) {
+        case PowAlgo::SHA256:   algoLimit = params.powLimit; break;
+        case PowAlgo::YESPOWER: algoLimit = params.powLimitYespower; break;
+        case PowAlgo::ETHASH:   algoLimit = params.powLimitEthash; break;
+        }
+
+        if (bnTarget > UintToArith256(algoLimit)) {
+            LogPrintf("❌ Tri-PoW block rejected @%d: target above algo %d powLimit\n",
+                      nHeight, static_cast<int>(algo));
+            return false;
+        }
+
+        switch (algo) {
+        case PowAlgo::SHA256:
+            LogPrintf("⛏️ Tri-PoW @%d: SHA256\n", nHeight);
+            return UintToArith256(hash) <= bnTarget;
+        case PowAlgo::YESPOWER:
+            LogPrintf("⛏️ Tri-PoW @%d: Yespower (always allowed post-fork)\n", nHeight);
+            return CheckYespower(block, bnTarget, nHeight);
+        case PowAlgo::ETHASH:
+            LogPrintf("⛏️ Tri-PoW @%d: Ethash\n", nHeight);
+            return CheckEthash(block, bnTarget, nHeight);
+        }
+        return false; // unreachable: no fallthrough between algorithms
+    }
+
+    // -----------------------------------------------------------------------
     // POST-REACTIVATION (height >= sha256ReactivationHeight): dual PoW.
     //
     //   SHA256 is always accepted. The effective SHA256 target is the
@@ -514,14 +743,22 @@ bool CheckProofOfWorkWithHeight(uint256 hash, CBlockHeader block, unsigned int n
 
 bool CheckProofOfWork(uint256 hash, const CBlockHeader& blockHeader, unsigned int nBits, const Consensus::Params& params, int nHeight, int64_t prevBlockTime)
 {
-    const char* algoTag = IsPostSha256Fork(nHeight, params)
+    const char* algoTag = (nHeight >= params.triPowForkHeight)
+                              ? "Tri-PoW (per-block tagged algorithm)"
+                              : (IsPostSha256Fork(nHeight, params)
                               ? "SHA256 (post-reactivation, Yespower fallback when stalled)"
-                              : ((nHeight >= params.yespowerForkHeight) ? "Yespower" : "SHA256");
+                              : ((nHeight >= params.yespowerForkHeight) ? "Yespower" : "SHA256"));
     LogPrintf("🚧 CheckPoW height=%d, using: %s\n", nHeight, algoTag);
 
     if (nHeight == 0) {
         LogPrintf("🧱 Skipping PoW check for genesis block\n");
         return true;
+    }
+
+    // Tri-PoW always goes through the tri-PoW dispatch in
+    // CheckProofOfWorkWithHeight (per-tag algo + per-algo powLimit).
+    if (nHeight >= params.triPowForkHeight) {
+        return CheckProofOfWorkWithHeight(hash, blockHeader, nBits, params, nHeight, prevBlockTime);
     }
 
     // Post-reactivation always goes through the dual-PoW path.

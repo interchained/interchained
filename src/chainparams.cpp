@@ -62,6 +62,18 @@ static CBlock CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits
  */
 class CMainParams : public CChainParams {
 public:
+    // Tri-PoW activation height for mainnet. Set by Mark 2026-11-07:
+    // chain tip was 913981, so tri-PoW activates at 913982, the first
+    // block mined after release (no future scheduled fork). All
+    // existing history stays pre-activation and validates under era
+    // rules.
+    //
+    // WARNING: this value MUST be at/above the chain tip at release
+    // time. If the tip advances past 913982 before the release ships,
+    // bump this number first or blocks mined in between get judged
+    // under tri-PoW rules they were not mined under.
+    static constexpr int TRI_POW_ACTIVATION_HEIGHT = 913982;
+
     CMainParams() {
         strNetworkID = CBaseChainParams::MAIN;
         strGovernanceWallet = "itc1qg408c5vw9u4s47e5l5v5q0s0u98hprg8w94ffp";
@@ -85,6 +97,7 @@ public:
         // Yespower-pool fork that mined past 571799 before this binary
         // shipped. After grace, Yespower is emergency-only.
         consensus.nPowYespowerGraceBlocks = 4032;
+        consensus.triPowForkHeight = TRI_POW_ACTIVATION_HEIGHT;
         consensus.difficultyForkHeight = std::numeric_limits<int>::max();
         consensus.nextDifficultyForkHeight = 1;
         consensus.nextDifficultyFork2Height = 1;
@@ -104,6 +117,9 @@ public:
         consensus.MinBIP9WarningHeight = 1; // disable softfork warnings
         consensus.powLimit = uint256S("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.powLimitYespower = uint256S("00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        // Ethash track's minimum-difficulty ceiling: same magnitude
+        // class as powLimitYespower.
+        consensus.powLimitEthash = uint256S("00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.powLimitEasyBlocks = uint256S("000ffff000000000000000000000000000000000000000000000000000000000");
         consensus.nPowTargetTimespan = 12 * 60 * 60; // = 12 hours worth of blocks
         consensus.nPowTargetSpacing = 30; 
@@ -213,6 +229,8 @@ public:
         consensus.CSVHeight = 770112; // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
         consensus.SegwitHeight = 834624; // 00000000002b980fcd729daaa248fd9316a5200e9b367f4ff2c42453e84201ca
         consensus.MinBIP9WarningHeight = 836640; // segwit activation height + miner confirmation window
+        consensus.triPowForkHeight = 100;
+        consensus.powLimitEthash = uint256S("00000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.powLimit = uint256S("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;
@@ -415,6 +433,13 @@ public:
         consensus.CSVHeight = 432; // CSV activated on regtest (Used in rpc activation tests)
         consensus.SegwitHeight = 0; // SEGWIT is always activated on regtest unless overridden
         consensus.MinBIP9WarningHeight = 0;
+        // Regtest does not set sha256ReactivationHeight/yespowerForkHeight
+        // (they keep their defaults); likewise tri-PoW is active
+        // essentially from genesis here: height 1, mirroring mainnet's
+        // yespowerForkHeight/sha256ForkHeight = 1 pattern.
+        consensus.triPowForkHeight = 1;
+        // Very easy limit, mirroring the regtest powLimit pattern below.
+        consensus.powLimitEthash = uint256S("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.powLimit = uint256S("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
         consensus.nPowTargetSpacing = 10 * 60;

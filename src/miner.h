@@ -14,6 +14,8 @@
 #include <txmempool.h>
 #include <validation.h>
 
+#include <pow.h>
+
 #include <memory>
 #include <stdint.h>
 
@@ -199,6 +201,15 @@ private:
       * of updated descendants. */
     int UpdatePackagesForAdded(const CTxMemPool::setEntries& alreadyAdded, indexed_modified_transaction_set& mapModifiedTx) EXCLUSIVE_LOCKS_REQUIRED(m_mempool.cs);
 };
+
+/**
+ * Proof-of-work algorithm selected for newly created block templates.
+ * Only consulted at heights >= Consensus::Params::triPowForkHeight;
+ * pre-fork templates are never tagged and generation is unchanged.
+ * Set by the generate* RPCs (scoped, restored after the call); the
+ * default is SHA256. Defined in miner.cpp.
+ */
+extern PowAlgo g_mining_algo;
 
 /** Modify the extranonce in a block */
 void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned int& nExtraNonce);

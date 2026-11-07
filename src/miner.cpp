@@ -22,6 +22,7 @@
 #include <policy/feerate.h>
 #include <policy/policy.h>
 #include <pow.h>
+#include <pow/ethash.h>
 #include <primitives/transaction.h>
 #include <timedata.h>
 #include <util/moneystr.h>
@@ -53,6 +54,8 @@
 CTxMemPool& EnsureMemPool(NodeContext& node);
 
 extern bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock>& block, bool fForceProcessing, bool* fNewBlock);
+
+PowAlgo g_mining_algo = PowAlgo::SHA256;
 
 static std::atomic<bool> foundBlock(false);
 static std::atomic<uint64_t> totalHashes(0);
@@ -142,8 +145,31 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
 
                         int nHeight = ::ChainActive().Height() + 1;
                         uint256 hash;
+                        bool fSolved = false;
                         const Consensus::Params& cp = Params().GetConsensus();
-                        if (nHeight >= cp.sha256ReactivationHeight) {
+                        if (nHeight >= cp.triPowForkHeight) {
+                            // Tri-PoW: dispatch on the template's algo tag.
+                            switch (GetBlockPowAlgo(block, nHeight, cp)) {
+                            case PowAlgo::ETHASH:
+                                // Ethash grinds the 64-bit nonce; the
+                                // winning nonce's mix hash must be recorded
+                                // in the header (MineEthash does both).
+                                // One hashimoto try per outer iteration.
+                                block.nNonce64 = nonce;
+                                fSolved = MineEthash(block, bnTarget, nHeight, 1);
+                                hash = block.GetHash();
+                                break;
+                            case PowAlgo::YESPOWER:
+                                hash = YespowerHash(block, &shared, nHeight);
+                                fSolved = UintToArith256(hash) <= UintToArith256(hashTarget);
+                                break;
+                            case PowAlgo::SHA256:
+                            default:
+                                hash = block.GetHash();
+                                fSolved = UintToArith256(hash) <= UintToArith256(hashTarget);
+                                break;
+                            }
+                        } else if (nHeight >= cp.sha256ReactivationHeight) {
                             // Dual-PoW: SHA256 is the primary algorithm at and after
                             // the reactivation height. During the grace window either
                             // algorithm is consensus-valid; post-grace, Yespower is
@@ -151,10 +177,13 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
                             // > nPowEmergencyTimeout), which a single miner cannot
                             // reliably engineer — so always mine SHA256 here.
                             hash = block.GetHash();
+                            fSolved = UintToArith256(hash) <= UintToArith256(hashTarget);
                         } else if (nHeight >= 1) {
                             hash = YespowerHash(block, &shared, nHeight);
+                            fSolved = UintToArith256(hash) <= UintToArith256(hashTarget);
                         } else {
                             hash = block.GetHash();
+                            fSolved = UintToArith256(hash) <= UintToArith256(hashTarget);
                         }
 
                         if (printCount < 10) {
@@ -162,7 +191,7 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
                             printCount++;
                         }
 
-                        if (UintToArith256(hash) <= UintToArith256(hashTarget)) {
+                        if (fSolved) {
                             LogPrintf("✅ [thread %d] Valid block found! Hash: %s\n", threadId, hash.ToString());
                             LogPrintf("🧩 Merkle Root: %s\n", block.hashMerkleRoot.ToString());
                             LogPrintf("🎯 Coinbase TXID: %s\n", block.vtx[0]->GetHash().ToString());
@@ -452,6 +481,14 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
 
     // Fill in header
     pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
+    // Tri-PoW: tag the template with the selected mining algorithm BEFORE
+    // nBits is finalized — UpdateTime() may recompute nBits on
+    // min-difficulty chains and GetNextWorkRequired() below must both see
+    // the tag so the per-algo difficulty track is selected. Pre-fork
+    // templates are left untouched.
+    if (nHeight >= chainparams.GetConsensus().triPowForkHeight) {
+        SetBlockPowAlgo(*pblock, g_mining_algo);
+    }
     UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
     pblock->nBits          = GetNextWorkRequired(pindexPrev, pblock, chainparams.GetConsensus());
     pblock->nNonce         = 0;

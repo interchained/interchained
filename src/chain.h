@@ -9,6 +9,7 @@
 #include <arith_uint256.h>
 #include <consensus/params.h>
 #include <flatfile.h>
+#include <pow.h>
 #include <primitives/block.h>
 #include <tinyformat.h>
 #include <uint256.h>
@@ -180,6 +181,12 @@ public:
     uint32_t nBits{0};
     uint32_t nNonce{0};
 
+    //! Tri-PoW: Ethash-only header extras (zero/null for other algos).
+    //! Kept in the index so a header rebuilt from the index hashes
+    //! identically to the received header (see CDiskBlockIndex).
+    uint64_t nNonce64{0};
+    uint256 mixHash{};
+
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
     int32_t nSequenceId{0};
 
@@ -195,7 +202,9 @@ public:
           hashMerkleRoot{block.hashMerkleRoot},
           nTime{block.nTime},
           nBits{block.nBits},
-          nNonce{block.nNonce}
+          nNonce{block.nNonce},
+          nNonce64{block.nNonce64},
+          mixHash{block.mixHash}
     {
     }
 
@@ -227,6 +236,8 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
+        block.nNonce64       = nNonce64;
+        block.mixHash        = mixHash;
         return block;
     }
 
@@ -349,6 +360,13 @@ public:
         READWRITE(obj.nTime);
         READWRITE(obj.nBits);
         READWRITE(obj.nNonce);
+        // Tri-PoW: Ethash-tagged entries also persist the Ethash header
+        // extras, gated on the nVersion tag exactly like CBlockHeader
+        // serialization, so pre-tri-PoW index entries are byte-identical.
+        if (PowAlgoTagFromVersion(obj.nVersion) == static_cast<int>(PowAlgo::ETHASH)) {
+            READWRITE(obj.nNonce64);
+            READWRITE(obj.mixHash);
+        }
     }
 
     uint256 GetBlockHash() const
@@ -360,6 +378,8 @@ public:
         block.nTime           = nTime;
         block.nBits           = nBits;
         block.nNonce          = nNonce;
+        block.nNonce64        = nNonce64;
+        block.mixHash         = mixHash;
         return block.GetHash();
     }
 

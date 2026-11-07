@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <amount.h>
+#include <arith_uint256.h>
 #include <chain.h>
 #include <node/context.h>
 #include <chainparams.h>
@@ -19,6 +20,7 @@
 #include <policy/fees.h>
 #include <streams.h>
 #include <pow.h>
+#include <pow/ethash.h>
 #include <rpc/blockchain.h>
 #include <rpc/mining.h>
 #include <rpc/server.h>
@@ -52,6 +54,125 @@ extern CTxMemPool mempool;
  * or from the last difficulty change if 'lookup' is nonpositive.
  * If 'height' is nonnegative, compute the estimate at the time when a given block was found.
  */
+
+// ---------------------------------------------------------------------------
+// Tri-PoW per-algo reporting helpers (RPC reporting only; no consensus use).
+// Algo identity and per-algo powLimits come from the fixed pow.h /
+// Consensus::Params API: GetBlockPowAlgo() era-classifies pre-fork heights
+// (yespower era -> YESPOWER, otherwise SHA256; ETHASH has no pre-fork era),
+// params.powLimit / powLimitYespower / powLimitEthash are the per-track
+// limits, and params.triPowForkHeight is the tri-PoW activation height.
+// ---------------------------------------------------------------------------
+
+/** The powLimit governing one algo's difficulty track. */
+static const uint256& AlgoPowLimit(PowAlgo algo, const Consensus::Params& params)
+{
+    switch (algo) {
+    case PowAlgo::YESPOWER: return params.powLimitYespower;
+    case PowAlgo::ETHASH:   return params.powLimitEthash;
+    case PowAlgo::SHA256:
+    default:                return params.powLimit;
+    }
+}
+
+/** GetDifficulty()'s compact-target math, applied to a raw nBits value. */
+static double GetDifficultyFromBits(uint32_t nBits)
+{
+    int nShift = (nBits >> 24) & 0xff;
+    double dDiff =
+        (double)0x0000ffff / (double)(nBits & 0x00ffffff);
+
+    while (nShift < 29)
+    {
+        dDiff *= 256.0;
+        nShift++;
+    }
+    while (nShift > 29)
+    {
+        dDiff /= 256.0;
+        nShift--;
+    }
+
+    return dDiff;
+}
+
+/**
+ * Difficulty of one algo track: the difficulty (via GetDifficulty on the
+ * block index) of the latest block in the active chain mined with that
+ * algo. If no same-algo block exists yet in the active chain, the track
+ * still sits at its powLimit, so report the difficulty corresponding to
+ * the algo's powLimit.
+ */
+static double GetAlgoDifficulty(const CBlockIndex* tip, PowAlgo algo, const Consensus::Params& params)
+{
+    for (const CBlockIndex* pindex = tip; pindex != nullptr; pindex = pindex->pprev) {
+        if (GetBlockPowAlgo(pindex->GetBlockHeader(), pindex->nHeight, params) == algo) {
+            return GetDifficulty(pindex);
+        }
+    }
+    return GetDifficultyFromBits(UintToArith256(AlgoPowLimit(algo, params)).GetCompact());
+}
+
+/**
+ * Difficulty-derived hashrate estimate for a single PoW algo.
+ *
+ * Walks the same lookup window as GetNetworkHashPS (same lookup
+ * normalisation: nonpositive means "since last difficulty change", capped
+ * at the chain length ending at pb), but considers only blocks whose
+ * GetBlockPowAlgo() == algo. The estimate is
+ *     (sum of those blocks' per-block work, from GetBlockProof)
+ *     / (timespan covered by those blocks, max-min block time as in the
+ *        legacy function).
+ * This is a difficulty-derived estimate and only an honest approximation
+ * of true hashrate: it assumes each block's difficulty held over its
+ * share of the window and inherits block-timestamp noise. If fewer than
+ * 2 same-algo blocks fall in the window (or they span zero time), the
+ * algo contributes no measurable rate and 0 is reported.
+ */
+static double EstimateAlgoHashrate(const CBlockIndex* pb, int lookup, PowAlgo algo, const Consensus::Params& params)
+{
+    if (pb == nullptr || !pb->nHeight)
+        return 0;
+
+    // If lookup is -1, then use blocks since last difficulty change.
+    if (lookup <= 0)
+        lookup = pb->nHeight % params.DifficultyAdjustmentInterval() + 1;
+
+    // If lookup is larger than chain, then set it to chain length.
+    if (lookup > pb->nHeight)
+        lookup = pb->nHeight;
+
+    arith_uint256 workSum = 0;
+    int64_t minTime = 0;
+    int64_t maxTime = 0;
+    int nFound = 0;
+    const CBlockIndex* pindex = pb;
+    for (int i = 0; i < lookup && pindex != nullptr; i++) {
+        if (GetBlockPowAlgo(pindex->GetBlockHeader(), pindex->nHeight, params) == algo) {
+            workSum += GetBlockProof(*pindex);
+            int64_t time = pindex->GetBlockTime();
+            if (nFound == 0) {
+                minTime = maxTime = time;
+            } else {
+                minTime = std::min(time, minTime);
+                maxTime = std::max(time, maxTime);
+            }
+            nFound++;
+        }
+        pindex = pindex->pprev;
+    }
+
+    if (nFound < 2)
+        return 0;
+
+    // In case there's a situation where minTime == maxTime, we don't want a divide by zero exception.
+    if (minTime == maxTime)
+        return 0;
+
+    int64_t timeDiff = maxTime - minTime;
+    return workSum.getdouble() / timeDiff;
+}
+
 static UniValue GetNetworkHashPS(int lookup, int height) {
     CBlockIndex *pb = ::ChainActive().Tip();
 
@@ -61,6 +182,20 @@ static UniValue GetNetworkHashPS(int lookup, int height) {
     if (pb == nullptr || !pb->nHeight)
         return 0;
 
+    const Consensus::Params& consensusParams = Params().GetConsensus();
+
+    // Tri-PoW (at/after triPowForkHeight): the combined network hashrate
+    // is the sum of the three per-algo difficulty-derived estimates over
+    // the same lookup window (see EstimateAlgoHashrate).
+    if (pb->nHeight >= consensusParams.triPowForkHeight) {
+        return EstimateAlgoHashrate(pb, lookup, PowAlgo::SHA256, consensusParams)
+             + EstimateAlgoHashrate(pb, lookup, PowAlgo::YESPOWER, consensusParams)
+             + EstimateAlgoHashrate(pb, lookup, PowAlgo::ETHASH, consensusParams);
+    }
+
+    // Pre-fork: legacy computation unchanged. In the pre-fork eras a
+    // single algo is active, and that algo's per-algo estimate over the
+    // window equals this legacy figure.
     // If lookup is -1, then use blocks since last difficulty change.
     if (lookup <= 0)
         lookup = pb->nHeight % Params().GetConsensus().DifficultyAdjustmentInterval() + 1;
@@ -93,6 +228,7 @@ static RPCHelpMan getnetworkhashps()
 {
     return RPCHelpMan{"getnetworkhashps",
                 "\nReturns the estimated network hashes per second based on the last n blocks.\n"
+                "At/after the tri-PoW fork this is the combined estimate: the sum of the per-algo (SHA256, Yespower, Ethash) difficulty-derived estimates over the same window.\n"
                 "Pass in [blocks] to override # of blocks, -1 specifies since last difficulty change.\n"
                 "Pass in [height] to estimate the network speed at the time when a certain block was found.\n",
                 {
@@ -123,10 +259,38 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
     }
 
     CChainParams chainparams(Params());
-    
+
     int height = ::ChainActive().Height() + 1; // next block height
     const Consensus::Params& consensusParams = chainparams.GetConsensus();
-    
+
+    const bool fTriPow = height >= consensusParams.triPowForkHeight;
+    const PowAlgo triPowAlgo = fTriPow ? GetBlockPowAlgo(block, height, consensusParams) : PowAlgo::SHA256;
+
+    if (fTriPow && triPowAlgo == PowAlgo::ETHASH) {
+        // Tri-PoW / Ethash: grind the 64-bit nonce (nNonce64), not nNonce.
+        // MineEthash records the winning nonce AND its mix hash in the
+        // header (verification requires the mix hash to match, so
+        // iterating against CheckEthash alone could never solve).
+        // Hashimoto-light per try — fine at regtest/trivial difficulty.
+        arith_uint256 bnTarget;
+        bnTarget.SetCompact(block.nBits);
+        if (max_tries > 0 && !ShutdownRequested()) {
+            MineEthash(block, bnTarget, height, static_cast<uint64_t>(max_tries));
+        }
+    } else if (fTriPow) {
+        // Tri-PoW / SHA256 or Yespower: grind nNonce against the hash of
+        // the template's tagged algorithm.
+        while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !ShutdownRequested()) {
+            uint256 powHash = (triPowAlgo == PowAlgo::YESPOWER)
+                ? block.YespowerHash(height)
+                : block.GetHash();
+            if (CheckProofOfWorkWithHeight(powHash, block, block.nBits, consensusParams, height)) {
+                break;
+            }
+            ++block.nNonce;
+            --max_tries;
+        }
+    } else
     while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !ShutdownRequested()) {
         uint256 powHash;
         // Dual-PoW: at and after the SHA256 reactivation height, mine with SHA256.
@@ -158,7 +322,13 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
         throw JSONRPCError(RPC_INTERNAL_ERROR, "ProcessNewBlock, block not accepted");
     }
 
-    if (height >= consensusParams.sha256ReactivationHeight) {
+    if (fTriPow) {
+        // Yespower convention (as pre-fork) reports the Yespower hash;
+        // SHA256 and Ethash blocks report the identity hash, GetHash().
+        block_hash = (triPowAlgo == PowAlgo::YESPOWER)
+            ? block.YespowerHash(height)
+            : block.GetHash();
+    } else if (height >= consensusParams.sha256ReactivationHeight) {
         block_hash = block.GetHash();
     } else if (height >= 1) {
         block_hash = YespowerHash(block, height);
@@ -272,9 +442,29 @@ static RPCHelpMan generatetodescriptor()
     };
 }
 
+/** Parse the optional trailing "algo" argument of the generate* RPCs. */
+static PowAlgo ParseMiningAlgoArg(const UniValue& arg)
+{
+    const std::string algo = arg.isNull() ? "sha256" : arg.get_str();
+    if (algo == "sha256") return PowAlgo::SHA256;
+    if (algo == "yespower") return PowAlgo::YESPOWER;
+    if (algo == "ethash") return PowAlgo::ETHASH;
+    throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid algo \"" + algo + "\", must be one of: sha256, yespower, ethash");
+}
+
+/** Sets g_mining_algo for the scope, restoring the previous value on exit. */
+struct ScopedMiningAlgo {
+    PowAlgo prev;
+    explicit ScopedMiningAlgo(PowAlgo algo) : prev(g_mining_algo) { g_mining_algo = algo; }
+    ~ScopedMiningAlgo() { g_mining_algo = prev; }
+};
+
 static RPCHelpMan generate()
 {
-    return RPCHelpMan{"generate", "has been replaced by the -generate cli option. Refer to -help for more information.", {}, {}, RPCExamples{""}, [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+    return RPCHelpMan{"generate", "has been replaced by the -generate cli option. Refer to -help for more information.",
+                {
+                    {"algo", RPCArg::Type::STR, /* default */ "sha256", "The proof-of-work algorithm to mine with: \"sha256\", \"yespower\" or \"ethash\" (tri-PoW fork heights only)."},
+                }, {}, RPCExamples{""}, [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
 
     if (request.fHelp) {
         throw std::runtime_error(self.ToString());
@@ -292,6 +482,7 @@ static RPCHelpMan generatetoaddress()
                     {"nblocks", RPCArg::Type::NUM, RPCArg::Optional::NO, "How many blocks are generated immediately."},
                     {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The address to send the newly generated interchained to."},
                     {"maxtries", RPCArg::Type::NUM, /* default */ ToString(DEFAULT_MAX_TRIES), "How many iterations to try."},
+                    {"algo", RPCArg::Type::STR, /* default */ "sha256", "The proof-of-work algorithm to mine with: \"sha256\", \"yespower\" or \"ethash\". Only takes effect at tri-PoW fork heights."},
                 },
                 RPCResult{
                     RPCResult::Type::ARR, "", "hashes of blocks generated",
@@ -308,6 +499,9 @@ static RPCHelpMan generatetoaddress()
 {
     const int num_blocks{request.params[0].get_int()};
     const uint64_t max_tries{request.params[2].isNull() ? DEFAULT_MAX_TRIES : request.params[2].get_int()};
+    // Validated before any state is touched; scoped so the caller's
+    // previous selection is restored when this call returns.
+    const ScopedMiningAlgo scoped_algo{ParseMiningAlgoArg(request.params[3])};
 
     CTxDestination destination = DecodeDestination(request.params[1].get_str());
     if (!IsValidDestination(destination)) {
@@ -337,6 +531,7 @@ static RPCHelpMan generateblock()
                     {"rawtx/txid", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, ""},
                 },
             },
+            {"algo", RPCArg::Type::STR, /* default */ "sha256", "The proof-of-work algorithm to mine with: \"sha256\", \"yespower\" or \"ethash\" (tri-PoW fork heights only)."},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -388,6 +583,10 @@ static RPCHelpMan generateblock()
             throw JSONRPCError(RPC_DESERIALIZATION_ERROR, strprintf("Transaction decode failed for %s. Make sure the tx has at least one input.", str));
         }
     }
+
+    // Tri-PoW: honor the optional "algo" argument for this call (the
+    // template is tagged inside CreateNewBlock via g_mining_algo).
+    const ScopedMiningAlgo scoped_algo{ParseMiningAlgoArg(request.params[2])};
 
     CChainParams chainparams(Params());
     CBlock block;
@@ -445,7 +644,13 @@ static RPCHelpMan getmininginfo()
                         {RPCResult::Type::NUM, "currentblockweight", /* optional */ true, "The block weight of the last assembled block (only present if a block was ever assembled)"},
                         {RPCResult::Type::NUM, "currentblocktx", /* optional */ true, "The number of block transactions of the last assembled block (only present if a block was ever assembled)"},
                         {RPCResult::Type::NUM, "difficulty", "The current difficulty"},
-                        {RPCResult::Type::NUM, "networkhashps", "The network hashes per second"},
+                        {RPCResult::Type::NUM, "difficulty_sha256", "The current difficulty of the SHA256 track (latest SHA256 block; the track's powLimit difficulty if none exists yet)"},
+                        {RPCResult::Type::NUM, "difficulty_yespower", "The current difficulty of the Yespower track (latest Yespower block; the track's powLimit difficulty if none exists yet)"},
+                        {RPCResult::Type::NUM, "difficulty_ethash", "The current difficulty of the Ethash track (latest Ethash block; the track's powLimit difficulty if none exists yet)"},
+                        {RPCResult::Type::NUM, "networkhashps", "The network hashes per second (combined across all PoW algos at/after the tri-PoW fork)"},
+                        {RPCResult::Type::NUM, "networkhashps_sha256", "The estimated SHA256 hashes per second"},
+                        {RPCResult::Type::NUM, "networkhashps_yespower", "The estimated Yespower hashes per second"},
+                        {RPCResult::Type::NUM, "networkhashps_ethash", "The estimated Ethash hashes per second"},
                         {RPCResult::Type::NUM, "pooledtx", "The size of the mempool"},
                         {RPCResult::Type::STR, "chain", "current network name (main, test, regtest)"},
                         {RPCResult::Type::STR, "warnings", "any network and blockchain warnings"},
@@ -464,7 +669,21 @@ static RPCHelpMan getmininginfo()
     if (BlockAssembler::m_last_block_weight) obj.pushKV("currentblockweight", *BlockAssembler::m_last_block_weight);
     if (BlockAssembler::m_last_block_num_txs) obj.pushKV("currentblocktx", *BlockAssembler::m_last_block_num_txs);
     obj.pushKV("difficulty",       (double)GetDifficulty(::ChainActive().Tip()));
+    // Tri-PoW per-algo reporting: per-track difficulty (latest same-algo
+    // block, else the track's powLimit difficulty) and per-algo hashrate
+    // estimates over the same default 120-block window getnetworkhashps
+    // uses. Pre-fork, era classification attributes the estimates to the
+    // era's single active algo; the combined fields above/below keep
+    // their legacy semantics pre-fork and are the per-algo sum post-fork.
+    const Consensus::Params& consensusParams = Params().GetConsensus();
+    const CBlockIndex* tip = ::ChainActive().Tip();
+    obj.pushKV("difficulty_sha256",   GetAlgoDifficulty(tip, PowAlgo::SHA256, consensusParams));
+    obj.pushKV("difficulty_yespower", GetAlgoDifficulty(tip, PowAlgo::YESPOWER, consensusParams));
+    obj.pushKV("difficulty_ethash",   GetAlgoDifficulty(tip, PowAlgo::ETHASH, consensusParams));
     obj.pushKV("networkhashps",    getnetworkhashps().HandleRequest(request));
+    obj.pushKV("networkhashps_sha256",   EstimateAlgoHashrate(tip, 120, PowAlgo::SHA256, consensusParams));
+    obj.pushKV("networkhashps_yespower", EstimateAlgoHashrate(tip, 120, PowAlgo::YESPOWER, consensusParams));
+    obj.pushKV("networkhashps_ethash",   EstimateAlgoHashrate(tip, 120, PowAlgo::ETHASH, consensusParams));
     obj.pushKV("pooledtx",         (uint64_t)mempool.size());
     obj.pushKV("chain",            Params().NetworkIDString());
     obj.pushKV("warnings",         GetWarnings(false).original);
@@ -681,9 +900,19 @@ static RPCHelpMan getblocktemplate()
     UniValue lpval = NullUniValue;
     std::set<std::string> setClientRules;
     int64_t nMaxVersionPreVB = -1;
+    // Tri-PoW: optional "algo" template-request key selects the PoW
+    // algorithm the returned template is tagged for (default: the
+    // node's current mining algo). Unknown keys are normally ignored
+    // by getblocktemplate; "algo" is honored here.
+    PowAlgo gbt_algo = g_mining_algo;
     if (!request.params[0].isNull())
     {
         const UniValue& oparam = request.params[0].get_obj();
+        const UniValue& algoval = find_value(oparam, "algo");
+        if (algoval.isStr())
+            gbt_algo = ParseMiningAlgoArg(algoval);
+        else if (!algoval.isNull())
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid algo");
         const UniValue& modeval = find_value(oparam, "mode");
         if (modeval.isStr())
             strMode = modeval.get_str();
@@ -837,7 +1066,8 @@ static RPCHelpMan getblocktemplate()
         CBlockIndex* pindexPrevNew = ::ChainActive().Tip();
         nStart = GetTime();
 
-        // Create new block
+        // Create new block (tagged for gbt_algo via g_mining_algo)
+        const ScopedMiningAlgo scoped_gbt_algo{gbt_algo};
         CScript scriptDummy = CScript() << OP_TRUE;
         pblocktemplate = BlockAssembler(mempool, Params()).CreateNewBlock(scriptDummy);
         if (!pblocktemplate)
@@ -1388,7 +1618,7 @@ static const CRPCCommand commands[] =
 
     { "generating",         "generatetoaddress",      &generatetoaddress,      {"nblocks","address","maxtries"} },
     { "generating",         "generatetodescriptor",   &generatetodescriptor,   {"num_blocks","descriptor","maxtries"} },
-    { "generating",         "generateblock",          &generateblock,          {"output","transactions"} },
+    { "generating",         "generateblock",          &generateblock,          {"output","transactions","algo"} },
     { "generating",         "setgenerate",            &setgenerate,            {"generate", "genproclimit", "address"} },
 
 
