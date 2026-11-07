@@ -1157,9 +1157,13 @@ static bool WriteBlockToDisk(const CBlock& block, FlatFilePos& pos, const CMessa
     if (filein.IsNull())
         return error("ReadBlockFromDisk: OpenBlockFile failed for %s", pos.ToString());
 
-    // Read block
+    // Read block. Height-aware: this reader knows the block's height, and
+    // pre-fork blocks whose nVersion bits collide with the Ethash tag
+    // must not be read with phantom Ethash extras (the tag-only header
+    // reader corrupts the transaction count and VerifyDB reports a
+    // corrupt block database at the tip).
     try {
-        filein >> block;
+        block.UnserializeWithHeight(filein, nHeight, consensusParams.triPowForkHeight);
     }
     catch (const std::exception& e) {
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
