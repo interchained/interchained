@@ -9,6 +9,7 @@
 #include <primitives/transaction.h>
 #include <serialize.h>
 #include <uint256.h>
+#include <pow.h> // PowAlgo + POW_ALGO_TAG_* (tag lives in nVersion; see pow.h)
 #include "consensus/params.h"
 
 /** Nodes collect new transactions into a block, hash them into a hash tree,
@@ -28,7 +29,11 @@ public:
     uint32_t nTime;
     uint32_t nBits;
     uint32_t nNonce;
-    
+    // Tri-PoW (Ethash only): 64-bit nonce and mix hash. Only serialized
+    // for Ethash-tagged headers; see SerializationOp below.
+    uint64_t nNonce64;
+    uint256 mixHash;
+
     CBlockHeader()
     {
         SetNull();
@@ -42,6 +47,18 @@ public:
         READWRITE(nTime);
         READWRITE(nBits);
         READWRITE(nNonce);
+        // Tri-PoW: gating is purely on the nVersion tag bits, because
+        // deserialization has no height available. Ethash-tagged headers
+        // additionally carry nNonce64 then mixHash, in that order, after
+        // the standard fields (same conditional-serialization precedent
+        // as CBlock's witness section below). All other headers stay
+        // byte-identical to the legacy 80-byte header. GetHash() remains
+        // SHA256d over this serialized form, so Ethash headers hash over
+        // their extra fields automatically.
+        if (PowAlgoTagFromVersion(nVersion) == static_cast<int>(PowAlgo::ETHASH)) {
+            READWRITE(nNonce64);
+            READWRITE(mixHash);
+        }
     }
     
     SERIALIZE_METHODS(CBlockHeader, obj);
@@ -64,6 +81,12 @@ public:
         s << nTime;
         s << nBits;
         s << nNonce;
+        // Keep the hash serialization identical to SerializationOp:
+        // Ethash-tagged headers append nNonce64 then mixHash.
+        if (PowAlgoTagFromVersion(nVersion) == static_cast<int>(PowAlgo::ETHASH)) {
+            s << nNonce64;
+            s << mixHash;
+        }
     }
 
     void SetNull()
@@ -74,6 +97,8 @@ public:
         nTime = 0;
         nBits = 0;
         nNonce = 0;
+        nNonce64 = 0;
+        mixHash.SetNull();
     }
 
     bool IsNull() const
@@ -145,6 +170,8 @@ public:
         block.nTime          = nTime;
         block.nBits          = nBits;
         block.nNonce         = nNonce;
+        block.nNonce64       = nNonce64;
+        block.mixHash        = mixHash;
         return block;
     }
     

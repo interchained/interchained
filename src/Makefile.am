@@ -6,7 +6,7 @@ DIST_SUBDIRS = secp256k1 univalue
 
 AM_LDFLAGS = $(LIBTOOL_LDFLAGS) $(HARDENED_LDFLAGS) $(GPROF_LDFLAGS) $(SANITIZER_LDFLAGS)
 AM_CXXFLAGS = $(DEBUG_CXXFLAGS) $(HARDENED_CXXFLAGS) $(WARN_CXXFLAGS) $(NOWARN_CXXFLAGS) $(ERROR_CXXFLAGS) $(GPROF_CXXFLAGS) $(SANITIZER_CXXFLAGS)
-AM_CPPFLAGS = $(DEBUG_CPPFLAGS) $(HARDENED_CPPFLAGS) -I$(srcdir)/crypto/yespower -I$(builddir)/crypto/yespower
+AM_CPPFLAGS = $(DEBUG_CPPFLAGS) $(HARDENED_CPPFLAGS) -I$(srcdir)/crypto/yespower -I$(builddir)/crypto/yespower -I$(srcdir)/crypto/ethash/include
 AM_LIBTOOLFLAGS = --preserve-dup-deps
 PTHREAD_FLAGS = $(PTHREAD_CFLAGS) $(PTHREAD_LIBS)
 EXTRA_LIBRARIES =
@@ -178,6 +178,7 @@ BITCOIN_CORE_H = \
   policy/rbf.h \
   policy/settings.h \
   pow.h \
+  pow/ethash.h \
   protocol.h \
   psbt.h \
   random.h \
@@ -287,6 +288,7 @@ libinterchained_server_a_SOURCES = \
   addrman.cpp \
   banman.cpp \
   pow/yespower.cpp \
+  pow/ethash.cpp \
   blockencodings.cpp \
   blockfilter.cpp \
   chain.cpp \
@@ -471,7 +473,10 @@ crypto_libinterchained_crypto_base_a_SOURCES = \
   crypto/siphash.h \
   crypto/yespower/yespower-opt.c \
   crypto/yespower/sha256.c \
-  crypto/yespower/sysendian.c 
+  crypto/yespower/sysendian.c \
+  crypto/ethash/lib/ethash/ethash.cpp \
+  crypto/ethash/lib/ethash/primes.c \
+  crypto/ethash/lib/keccak/keccak.c 
 
 if USE_ASM
 crypto_libinterchained_crypto_base_a_SOURCES += crypto/sha256_sse4.cpp
@@ -510,6 +515,7 @@ libinterchained_consensus_a_SOURCES = \
   hash.cpp \
   hash.h \
   pow/yespower.cpp \
+  pow/ethash.cpp \
   prevector.h \
   primitives/block.cpp \
   primitives/block.h \
@@ -769,7 +775,11 @@ EXTRA_DIST += \
   crypto/yespower/sha256.h \
   crypto/yespower/sha256.c \
   crypto/yespower/sysendian.h \
-  crypto/yespower/sysendian.c
+  crypto/yespower/sysendian.c \
+  crypto/ethash/include/ethash/ethash.h \
+  crypto/ethash/lib/ethash/ethash.cpp \
+  crypto/ethash/lib/ethash/primes.c \
+  crypto/ethash/lib/keccak/keccak.c
 
 config/interchained-config.h: config/stamp-h1
 	@$(MAKE) -C $(top_builddir) $(subdir)/$(@)

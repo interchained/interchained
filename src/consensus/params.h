@@ -98,6 +98,28 @@ struct Params {
      * `sha256ReactivationHeight` onward).
      */
     int nPowYespowerGraceBlocks{0};
+    /**
+     * Height at which tri-PoW becomes active for this network.
+     *
+     * Heights < triPowForkHeight validate under era rules (the
+     * pre-existing Yespower / SHA256-reactivation rules above).
+     * Heights >= triPowForkHeight are tri-PoW: SHA256, Yespower and
+     * Ethash are all accepted, each validated against its own
+     * per-algo difficulty track (see `powLimit`, `powLimitYespower`
+     * and `powLimitEthash`).
+     *
+     * Defaults to `std::numeric_limits<int>::max()` so any network that
+     * does not explicitly set this field never activates tri-PoW.
+     */
+    int triPowForkHeight{std::numeric_limits<int>::max()};
+    /**
+     * Minimum-difficulty ceiling (maximum target) for the Ethash
+     * track of tri-PoW. Ethash blocks at heights >= triPowForkHeight
+     * must satisfy this limit in addition to their per-algo
+     * difficulty target. Networks that never activate tri-PoW leave
+     * it null and never consult it.
+     */
+    uint256 powLimitEthash;
     int difficultyForkHeight;
     int nextDifficultyForkHeight;
     int nextDifficultyFork2Height;
