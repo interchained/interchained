@@ -462,9 +462,7 @@ struct ScopedMiningAlgo {
 static RPCHelpMan generate()
 {
     return RPCHelpMan{"generate", "has been replaced by the -generate cli option. Refer to -help for more information.",
-                {
-                    {"algo", RPCArg::Type::STR, /* default */ "sha256", "The proof-of-work algorithm to mine with: \"sha256\", \"yespower\" or \"ethash\" (tri-PoW fork heights only)."},
-                }, {}, RPCExamples{""}, [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+                {}, {}, RPCExamples{""}, [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
 
     if (request.fHelp) {
         throw std::runtime_error(self.ToString());
