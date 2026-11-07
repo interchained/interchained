@@ -1157,23 +1157,22 @@ static bool WriteBlockToDisk(const CBlock& block, FlatFilePos& pos, const CMessa
     if (filein.IsNull())
         return error("ReadBlockFromDisk: OpenBlockFile failed for %s", pos.ToString());
 
-    // Read block. Height-aware: this reader knows the block's height, and
-    // pre-fork blocks whose nVersion bits collide with the Ethash tag
-    // must not be read with phantom Ethash extras (the tag-only header
-    // reader corrupts the transaction count and VerifyDB reports a
-    // corrupt block database at the tip).
+    // Read block
     try {
-        block.UnserializeWithHeight(filein, nHeight, consensusParams.triPowForkHeight);
+        filein >> block;
     }
     catch (const std::exception& e) {
         return error("%s: Deserialize or I/O error - %s at %s", __func__, e.what(), pos.ToString());
     }
     // Dual-PoW hash selection (see CheckBlockHeader for the rationale).
+    // Height-aware hashing: a pre-fork block whose nVersion bits collide
+    // with the Ethash tag must hash over its real 80-byte header, not the
+    // phantom-extras image the context-free GetHash() produces.
     uint256 hash;
     if (nHeight == 0) {
         hash = block.GetHash(); // force legacy SHA256
     } else if (nHeight >= consensusParams.sha256ReactivationHeight) {
-        hash = block.GetHash(); // SHA256 (dual-PoW path)
+        hash = block.GetHashAtHeight(nHeight, consensusParams.triPowForkHeight); // SHA256 (dual-PoW path)
     } else if (nHeight >= 1) {
         hash = YespowerHash(block, nHeight);
     } else {
@@ -1203,7 +1202,7 @@ bool ReadBlockFromDisk(CBlock& block, const CBlockIndex* pindex, const Consensus
 
     if (!ReadBlockFromDisk(block, blockPos, consensusParams, pindex->nHeight))
         return false;
-    if (block.GetHash() != pindex->GetBlockHash())
+    if (block.GetHashAtHeight(pindex->nHeight, consensusParams.triPowForkHeight) != pindex->GetBlockHash())
         return error("ReadBlockFromDisk(CBlock&, CBlockIndex*): GetHash() doesn't match index for %s at %s",
                 pindex->ToString(), pindex->GetBlockPos().ToString());
     return true;
@@ -3446,7 +3445,7 @@ static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& st
     if (nHeight == 0) {
         hash = block.GetHash(); // force legacy SHA256
     } else if (nHeight >= consensusParams.sha256ReactivationHeight) {
-        hash = block.GetHash(); // SHA256 (dual-PoW path)
+        hash = block.GetHashAtHeight(nHeight, consensusParams.triPowForkHeight); // SHA256 (dual-PoW path; height-aware, see ReadBlockFromDisk)
     } else if (nHeight >= 1) {
         hash = YespowerHash(block, nHeight);
     } else {
