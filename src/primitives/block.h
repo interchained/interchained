@@ -92,6 +92,30 @@ public:
         }
     }
 
+    /** Height-aware deserialization. The plain SerializationOp gates the
+     *  Ethash extras on the nVersion tag alone (it has no height), which
+     *  misreads pre-fork blocks whose version bits collide with the
+     *  Ethash tag. Callers that know the block's height (block-file
+     *  reads) must use this instead: extras are read only when
+     *  TriPowHeaderExtrasApply says they exist. */
+    template <typename Stream>
+    void UnserializeWithHeight(Stream& s, int height, int triPowForkHeight)
+    {
+        s >> nVersion;
+        s >> hashPrevBlock;
+        s >> hashMerkleRoot;
+        s >> nTime;
+        s >> nBits;
+        s >> nNonce;
+        if (TriPowHeaderExtrasApply(nVersion, height, triPowForkHeight)) {
+            s >> nNonce64;
+            s >> mixHash;
+        } else {
+            nNonce64 = 0;
+            mixHash.SetNull();
+        }
+    }
+
     void SetNull()
     {
         nVersion = 0;
@@ -157,6 +181,20 @@ public:
         // Serialize vchWitness if block has previous block (not genesis) and includes witness
         if (obj.hashPrevBlock != uint256() && obj.vtx.size() > 0 && obj.vtx[0]->HasWitness()) {
             READWRITE(obj.vchWitness);
+        }
+    }
+
+    /** Height-aware block deserialization for block-file reads; mirrors
+     *  the read side of SERIALIZE_METHODS above but routes the header
+     *  through CBlockHeader::UnserializeWithHeight. */
+    template <typename Stream>
+    void UnserializeWithHeight(Stream& s, int height, int triPowForkHeight)
+    {
+        SetNull();
+        CBlockHeader::UnserializeWithHeight(s, height, triPowForkHeight);
+        s >> vtx;
+        if (hashPrevBlock != uint256() && vtx.size() > 0 && vtx[0]->HasWitness()) {
+            s >> vchWitness;
         }
     }
 
