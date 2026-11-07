@@ -459,6 +459,31 @@ struct ScopedMiningAlgo {
     ~ScopedMiningAlgo() { g_mining_algo = prev; }
 };
 
+static RPCHelpMan setminingalgo()
+{
+    return RPCHelpMan{"setminingalgo",
+                "\nSet the proof-of-work algorithm the node's own miner (setgenerate) and block templates use until changed.\n"
+                "The generate* RPCs keep their own per-call \"algo\" argument and are unaffected.\n",
+                {
+                    {"algo", RPCArg::Type::STR, RPCArg::Optional::NO, "The algorithm to mine with: \"sha256\", \"yespower\" or \"ethash\"."},
+                },
+                RPCResult{
+                    RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::STR, "algo", "The mining algorithm now in effect."},
+                    }},
+                RPCExamples{
+                    HelpExampleCli("setminingalgo", "\"yespower\"")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+            const PowAlgo algo = ParseMiningAlgoArg(request.params[0]);
+            g_mining_algo = algo;
+            UniValue result(UniValue::VOBJ);
+            result.pushKV("algo", algo == PowAlgo::YESPOWER ? "yespower" : algo == PowAlgo::ETHASH ? "ethash" : "sha256");
+            return result;
+        }};
+}
+
 static RPCHelpMan generate()
 {
     return RPCHelpMan{"generate", "has been replaced by the -generate cli option. Refer to -help for more information.",
@@ -1608,6 +1633,7 @@ static const CRPCCommand commands[] =
   //  --------------------- ------------------------  -----------------------  ----------
     { "mining",             "getnetworkhashps",       &getnetworkhashps,       {"nblocks","height"} },
     { "mining",             "getmininginfo",          &getmininginfo,          {} },
+    { "mining",             "setminingalgo",          &setminingalgo,          {"algo"} },
     { "mining",             "prioritisetransaction",  &prioritisetransaction,  {"txid","dummy","fee_delta"} },
     { "mining",             "getblocktemplate",       &getblocktemplate,       {"template_request"} },
     { "mining",             "submitblock",            &submitblock,            {"hexdata","dummy"} },
