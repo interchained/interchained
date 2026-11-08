@@ -317,7 +317,15 @@ static std::vector<std::pair<unsigned int, int64_t>> CollectSameAlgoWindow(
     const Consensus::Params& params, int nPastBlocks)
 {
     std::vector<std::pair<unsigned int, int64_t>> window;
-    for (const CBlockIndex* pindex = pindexLast; pindex && (int)window.size() < nPastBlocks; pindex = pindex->pprev) {
+    // Per-lane difficulty reset at the fork: the window never crosses
+    // below triPowForkHeight. Pre-fork blocks all carry the old shared
+    // difficulty track, so counting them would seed every lane with the
+    // combined network's difficulty and no lane could ever land its
+    // first block (the retarget only moves when a block is found). With
+    // the walk stopped at the fork, the padding below fills the window
+    // at the lane's powLimit and real post-fork blocks replace the pads
+    // one by one: each lane's difficulty is built from its own blocks.
+    for (const CBlockIndex* pindex = pindexLast; pindex && pindex->nHeight >= params.triPowForkHeight && (int)window.size() < nPastBlocks; pindex = pindex->pprev) {
         CBlockHeader ancestor = pindex->GetBlockHeader();
         if (GetBlockPowAlgo(ancestor, pindex->nHeight, params) == algo) {
             window.emplace_back(pindex->nBits, pindex->GetBlockTime());
