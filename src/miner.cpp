@@ -71,11 +71,17 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
     const CTxMemPool& mempool = EnsureMemPool(context);
 
     std::thread([=, &mempool]() {
+        // The setgenerate help promises "if genproclimit is < 0, use all
+        // cores", but nothing translated that until here: the raw -1 went
+        // straight into the thread loop below, whose condition
+        // (threadId < nThreads) then ran zero iterations and the miner
+        // silently hashed nothing at all.
+        const int nUseThreads = nThreads < 0 ? GetNumCores() : nThreads;
         while (fGenerating && !ShutdownRequested()) {
             foundBlock.store(false);
             totalHashes.store(0);
 
-            LogPrintf("♻️ Launching %d miner threads...\n", nThreads);
+            LogPrintf("♻️ Launching %d miner threads...\n", nUseThreads);
 
             const CChainParams& chainparams = Params();
             CTxDestination dest = DecodeDestination(payoutAddress);
@@ -96,7 +102,7 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
             CBlock originalBlock = pblocktemplate->block;
             LogPrintf("🧾 Block includes %d transactions\n", originalBlock.vtx.size() - 1);
 
-            for (int threadId = 0; threadId < nThreads; ++threadId) {
+            for (int threadId = 0; threadId < nUseThreads; ++threadId) {
                 std::thread([=, &mempool]() mutable {
                     LogPrintf("⛏️ Starting miner thread %d...\n", threadId);
                     static thread_local yespower_local_t shared;
@@ -135,7 +141,7 @@ void GenerateBitcoins(bool fGenerate, CConnman* connman, int nThreads, const std
                     int printCount = 0;
 
                     uint32_t startNonce = GetRand(std::numeric_limits<uint32_t>::max());
-                    for (uint32_t nonce = startNonce + threadId; nonce < std::numeric_limits<uint32_t>::max(); nonce += nThreads) {
+                    for (uint32_t nonce = startNonce + threadId; nonce < std::numeric_limits<uint32_t>::max(); nonce += nUseThreads) {
                         if (ShutdownRequested() || !fGenerating || foundBlock.load())
                             return;
 
