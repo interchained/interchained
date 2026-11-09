@@ -1078,7 +1078,13 @@ static RPCHelpMan getblocktemplate()
     static CBlockIndex* pindexPrev;
     static int64_t nStart;
     static std::unique_ptr<CBlockTemplate> pblocktemplate;
+    // Tri-PoW: the cached template is only valid for the algo it was
+    // tagged for. A caller asking for a different algo must rebuild,
+    // otherwise every lane gets served the first caller's tag (and a
+    // block solved against it is rejected for the wrong PoW).
+    static PowAlgo pblocktemplate_algo = PowAlgo::SHA256;
     if (pindexPrev != ::ChainActive().Tip() ||
+        gbt_algo != pblocktemplate_algo ||
         (mempool.GetTransactionsUpdated() != nTransactionsUpdatedLast && GetTime() - nStart > 5))
     {
         // Clear pindexPrev so future calls make a new block, despite any failures from here on
@@ -1098,6 +1104,7 @@ static RPCHelpMan getblocktemplate()
 
         // Need to update only after we know CreateNewBlock succeeded
         pindexPrev = pindexPrevNew;
+        pblocktemplate_algo = gbt_algo;
     }
     CHECK_NONFATAL(pindexPrev);
     CBlock* pblock = &pblocktemplate->block; // pointer for convenience
