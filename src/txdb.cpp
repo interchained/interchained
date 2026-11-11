@@ -268,6 +268,8 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
                 pindexNew->nTime          = diskindex.nTime;
                 pindexNew->nBits          = diskindex.nBits;
                 pindexNew->nNonce         = diskindex.nNonce;
+                pindexNew->nNonce64       = diskindex.nNonce64;
+                pindexNew->mixHash        = diskindex.mixHash;
                 pindexNew->nStatus        = diskindex.nStatus;
                 pindexNew->nTx            = diskindex.nTx;
                 
@@ -278,6 +280,8 @@ bool CBlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, 
                 dummyHeader.hashMerkleRoot = pindexNew->hashMerkleRoot;
                 dummyHeader.nVersion = pindexNew->nVersion;
                 dummyHeader.nNonce = pindexNew->nNonce;
+                dummyHeader.nNonce64 = pindexNew->nNonce64;
+                dummyHeader.mixHash  = pindexNew->mixHash;
                                 
                 // Pick the hash the PoW check expects for this height:
                 //   - Pre-reactivation Yespower blocks  → Yespower hash
